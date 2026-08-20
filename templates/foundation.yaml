@@ -1,0 +1,204 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AgentFormation shared identity, registry, uploads, and terminal session document.
+
+Parameters:
+  DeploymentName:
+    Type: String
+    Default: agentformation
+    AllowedPattern: '^[a-z][a-z0-9-]{2,31}$'
+  CognitoDomainPrefix:
+    Type: String
+    AllowedPattern: '^[a-z0-9][a-z0-9-]{2,62}$'
+  InitialCallbackUrl:
+    Type: String
+    Default: http://localhost:3000/api/auth/callback/cognito
+    AllowedPattern: '^https?://[^ ]+$'
+  InitialLogoutUrl:
+    Type: String
+    Default: http://localhost:3000/
+    AllowedPattern: '^https?://[^ ]+$'
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${AWS::StackName}-users'
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 14
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 7
+      MfaConfiguration: OPTIONAL
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate: [email]
+      UserPoolTags:
+        AgentFormationDeployment: !Ref DeploymentName
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref CognitoDomainPrefix
+      UserPoolId: !Ref UserPool
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub '${AWS::StackName}-web'
+      UserPoolId: !Ref UserPool
+      GenerateSecret: true
+      SupportedIdentityProviders: [COGNITO]
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      CallbackURLs: [!Ref InitialCallbackUrl]
+      LogoutURLs: [!Ref InitialLogoutUrl]
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  UserRegistry:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: userSub, AttributeType: S }
+      KeySchema:
+        - { AttributeName: userSub, KeyType: HASH }
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireUploads
+            Status: Enabled
+            Prefix: uploads/
+            ExpirationInDays: 1
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
+  WebRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      EmptyOnDelete: true
+      ImageScanningConfiguration: { ScanOnPush: true }
+      ImageTagMutability: IMMUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"Keep 10 images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}'
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
+  AuthSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: AgentFormation Auth.js session secret.
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
+  CognitoClientSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Populated by the guided deploy command from the Cognito client.
+      SecretString: pending-deploy
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
+  TerminalSessionDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: !Sub '${AWS::StackName}-terminal'
+      DocumentType: Session
+      UpdateMethod: NewVersion
+      Content:
+        schemaVersion: '1.0'
+        description: Attach a browser terminal to a persistent AgentFormation tmux session.
+        sessionType: Standard_Stream
+        parameters:
+          tmuxSession:
+            type: String
+            default: code
+            allowedPattern: '^[A-Za-z0-9_-]{1,32}$'
+        inputs:
+          runAsEnabled: true
+          runAsDefaultUser: agentformation
+          idleSessionTimeout: '60'
+          maxSessionDuration: '720'
+          shellProfile:
+            linux: |
+              export HOME=/home/agentformation
+              export USER=agentformation
+              export LOGNAME=agentformation
+              export SHELL=/bin/bash
+              export PATH=/home/agentformation/.local/bin:/usr/local/bin:/usr/bin:/bin
+              cd /workspace
+              exec tmux new-session -A -s '{{ tmuxSession }}' -c /workspace
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  CognitoIssuer:
+    Value: !Sub 'https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${UserPool}'
+  CognitoDomain:
+    Value: !Sub 'https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com'
+  UserRegistryTableName:
+    Value: !Ref UserRegistry
+  UploadBucketName:
+    Value: !Ref UploadBucket
+  WebRepositoryUri:
+    Value: !GetAtt WebRepository.RepositoryUri
+  WebRepositoryName:
+    Value: !Ref WebRepository
+  AuthSecretArn:
+    Value: !Ref AuthSecret
+  CognitoClientSecretArn:
+    Value: !Ref CognitoClientSecret
+  TerminalSessionDocumentName:
+    Value: !Ref TerminalSessionDocument

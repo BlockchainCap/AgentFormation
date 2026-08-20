@@ -1,0 +1,23 @@
+{
+  "deploymentName": "agentformation",
+  "region": "us-east-1",
+  "networkMode": "private-nat",
+  "runtime": {
+    "architecture": "arm64",
+    "instanceType": "m7g.xlarge",
+    "volumeSizeGiB": 50
+  },
+  "models": {
+    "claude": "us.anthropic.claude-sonnet-5",
+    "codex": "openai.gpt-5.6-sol"
+  },
+  "versions": {
+    "claudeCode": "2.1.235",
+    "codex": "0.148.0"
+  },
+  "users": [
+    {
+      "email": "admin@example.com"
+    }
+  ]
+}

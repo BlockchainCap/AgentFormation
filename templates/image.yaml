@@ -1,0 +1,251 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AgentFormation EC2 Image Builder pipeline for Claude Code and Codex runtimes.
+
+Parameters:
+  DeploymentName:
+    Type: String
+    AllowedPattern: '^[a-z][a-z0-9-]{2,31}$'
+  NetworkStackName:
+    Type: String
+    MinLength: 1
+  Architecture:
+    Type: String
+    Default: arm64
+    AllowedValues: [arm64, x86_64]
+  BuildInstanceType:
+    Type: String
+    Default: c7g.large
+    AllowedValues: [c7g.large, t4g.medium, c7i.large, t3.medium]
+  ClaudeCodeVersion:
+    Type: String
+    Default: 2.1.235
+    AllowedPattern: '^\d+\.\d+\.\d+$'
+  CodexVersion:
+    Type: String
+    Default: 0.148.0
+    AllowedPattern: '^\d+\.\d+\.\d+([-.][A-Za-z0-9.]+)?$'
+  AmiParameterPath:
+    Type: String
+    AllowedPattern: '^/[A-Za-z0-9/_.-]+$'
+  ComponentVersion:
+    Type: String
+    Default: 1.0.0
+    AllowedPattern: '^\d+\.\d+\.\d+$'
+
+Conditions:
+  IsArm: !Equals [!Ref Architecture, arm64]
+
+Rules:
+  MatchArchitectureAndBuilder:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref Architecture, arm64]
+            - !Contains [[c7g.large, t4g.medium], !Ref BuildInstanceType]
+          - !And
+            - !Equals [!Ref Architecture, x86_64]
+            - !Contains [[c7i.large, t3.medium], !Ref BuildInstanceType]
+        AssertDescription: Build instance type must match the selected architecture.
+
+Resources:
+  LatestAmiParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Ref AmiParameterPath
+      Type: String
+      Value: ami-pending-build
+      Description: Updated by the AgentFormation guided deploy command after an image build.
+      Tags:
+        AgentFormationDeployment: !Ref DeploymentName
+
+  ImageBuilderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
+  ImageBuilderInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref ImageBuilderRole]
+
+  InstallToolsComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: !Sub '${AWS::StackName}-install-tools'
+      Platform: Linux
+      Version: !Ref ComponentVersion
+      Description: Install pinned Claude Code and Codex CLIs with runtime tools.
+      Data: !Sub |
+        name: InstallAgentFormationTools
+        description: Install the AgentFormation runtime toolchain.
+        schemaVersion: 1.0
+        phases:
+          - name: build
+            steps:
+              - name: InstallSystemPackages
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -euo pipefail
+                    - export DEBIAN_FRONTEND=noninteractive
+                    - apt-get update
+                    - apt-get install -y --no-install-recommends bubblewrap build-essential ca-certificates curl docker.io git gnupg jq nodejs npm ripgrep tmux unzip
+                    - apt-get clean
+                    - rm -rf /var/lib/apt/lists/*
+              - name: InstallAwsCli
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -euo pipefail
+                    - curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
+                    - unzip -q /tmp/awscliv2.zip -d /tmp
+                    - /tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
+                    - rm -rf /tmp/aws /tmp/awscliv2.zip
+              - name: CreateRuntimeUser
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -euo pipefail
+                    - id agentformation >/dev/null 2>&1 || useradd --create-home --shell /bin/bash agentformation
+                    - usermod -aG docker agentformation
+                    - install -d -m 0750 -o agentformation -g agentformation /workspace
+                    - install -d -m 0700 -o agentformation -g agentformation /home/agentformation/.codex
+                    - install -d -m 0755 -o agentformation -g agentformation /home/agentformation/.local/bin
+              - name: InstallClaudeCode
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -euo pipefail
+                    - export DEBIAN_FRONTEND=noninteractive
+                    - install -d -m 0755 /etc/apt/keyrings
+                    - curl -fsSL https://downloads.claude.ai/keys/claude-code.asc -o /etc/apt/keyrings/claude-code.asc
+                    - gpg --show-keys /etc/apt/keyrings/claude-code.asc 2>&1 | tr -d ' ' | grep -F 31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE
+                    - echo "deb [signed-by=/etc/apt/keyrings/claude-code.asc] https://downloads.claude.ai/claude-code/apt/latest latest main" >/etc/apt/sources.list.d/claude-code.list
+                    - apt-get update
+                    - apt-get install -y --no-install-recommends claude-code=${ClaudeCodeVersion}-1
+                    - apt-mark hold claude-code
+                    - apt-get clean
+                    - rm -rf /var/lib/apt/lists/*
+              - name: InstallCodex
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -euo pipefail
+                    - curl -fsSL https://chatgpt.com/codex/install.sh -o /tmp/install-codex.sh
+                    - chmod 0755 /tmp/install-codex.sh
+                    - sudo -u agentformation env HOME=/home/agentformation CODEX_HOME=/home/agentformation/.codex CODEX_INSTALL_DIR=/home/agentformation/.local/bin CODEX_RELEASE=${CodexVersion} CODEX_NON_INTERACTIVE=1 /tmp/install-codex.sh
+                    - rm -f /tmp/install-codex.sh
+              - name: HardenRuntime
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -euo pipefail
+                    - systemctl enable docker
+                    - chmod 0700 /home/agentformation/.codex
+                    - chown -R agentformation:agentformation /home/agentformation /workspace
+          - name: validate
+            steps:
+              - name: VerifyToolchain
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -euo pipefail
+                    - test "$(/usr/bin/claude --version | awk '{print $1}')" = "${ClaudeCodeVersion}"
+                    - dpkg-query -W claude-code | grep -F "${ClaudeCodeVersion}-1"
+                    - apt-mark showhold | grep -Fx claude-code
+                    - sudo -u agentformation env HOME=/home/agentformation /home/agentformation/.local/bin/codex --version | grep -F "${CodexVersion}"
+                    - /usr/local/bin/aws --version
+                    - bwrap --version
+                    - git --version
+                    - tmux -V
+          - name: test
+            steps:
+              - name: VerifyPackagedRuntime
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -euo pipefail
+                    - test "$(/usr/bin/claude --version | awk '{print $1}')" = "${ClaudeCodeVersion}"
+                    - dpkg-query -W claude-code | grep -F "${ClaudeCodeVersion}-1"
+                    - apt-mark showhold | grep -Fx claude-code
+                    - sudo -u agentformation env HOME=/home/agentformation /home/agentformation/.local/bin/codex --version | grep -F "${CodexVersion}"
+                    - /usr/local/bin/aws --version
+                    - bwrap --version
+                    - systemctl is-enabled docker
+                    - systemctl is-active snap.amazon-ssm-agent.amazon-ssm-agent.service
+                    - test -d /home/agentformation
+                    - test "$(stat -c %U:%G /workspace)" = agentformation:agentformation
+
+  ImageRecipe:
+    Type: AWS::ImageBuilder::ImageRecipe
+    Properties:
+      Name: !Sub '${AWS::StackName}-recipe'
+      Version: !Ref ComponentVersion
+      ParentImage: !Sub
+        - 'arn:${AWS::Partition}:imagebuilder:${AWS::Region}:aws:image/ubuntu-server-24-lts-${Arch}/x.x.x'
+        - Arch: !If [IsArm, arm64, x86]
+      Components:
+        - ComponentArn: !Ref InstallToolsComponent
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+
+  InfrastructureConfiguration:
+    Type: AWS::ImageBuilder::InfrastructureConfiguration
+    Properties:
+      Name: !Sub '${AWS::StackName}-infrastructure'
+      InstanceProfileName: !Ref ImageBuilderInstanceProfile
+      InstanceTypes: [!Ref BuildInstanceType]
+      SubnetId:
+        Fn::ImportValue: !Sub '${NetworkStackName}-PrivateSubnetId'
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub '${NetworkStackName}-RuntimeSecurityGroupId'
+      TerminateInstanceOnFailure: true
+      ResourceTags:
+        AgentFormationDeployment: !Ref DeploymentName
+
+  DistributionConfiguration:
+    Type: AWS::ImageBuilder::DistributionConfiguration
+    Properties:
+      Name: !Sub '${AWS::StackName}-distribution'
+      Distributions:
+        - Region: !Ref AWS::Region
+          AmiDistributionConfiguration:
+            Name: !Sub '${DeploymentName}-{{imagebuilder:buildDate}}'
+            Description: AgentFormation runtime with pinned Claude Code and Codex CLIs.
+            AmiTags:
+              AgentFormationDeployment: !Ref DeploymentName
+
+  ImagePipeline:
+    Type: AWS::ImageBuilder::ImagePipeline
+    Properties:
+      Name: !Sub '${AWS::StackName}-pipeline'
+      ImageRecipeArn: !Ref ImageRecipe
+      InfrastructureConfigurationArn: !Ref InfrastructureConfiguration
+      DistributionConfigurationArn: !Ref DistributionConfiguration
+      Status: ENABLED
+      ImageTestsConfiguration:
+        ImageTestsEnabled: true
+        TimeoutMinutes: 60
+      Tags:
+        AgentFormationDeployment: !Ref DeploymentName
+
+Outputs:
+  ImagePipelineArn:
+    Value: !Ref ImagePipeline
+  AmiParameterPath:
+    Value: !Ref LatestAmiParameter

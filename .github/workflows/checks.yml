@@ -1,0 +1,82 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.6
+      - run: bun install --frozen-lockfile
+      - run: bun audit
+      - run: bun run format:check
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run build
+        env:
+          AUTH_COGNITO_ID: build-client
+          AUTH_COGNITO_SECRET: build-secret
+          AUTH_COGNITO_ISSUER: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_build
+          AUTH_SECRET: build-only-secret-with-at-least-32-characters
+          AWS_REGION: us-east-1
+          USER_REGISTRY_TABLE: build-users
+          UPLOAD_BUCKET: build-uploads
+          SESSION_DOCUMENT_NAME: build-terminal
+      - name: Build and smoke-test the production container
+        run: |
+          docker build --tag agentformation-web:test .
+          docker run --detach --rm \
+            --name agentformation-web-test \
+            --publish 127.0.0.1:3000:3000 \
+            --env HOSTNAME=container-internal \
+            --env AUTH_URL=http://localhost:3000 \
+            --env AUTH_TRUST_HOST=true \
+            --env AUTH_COGNITO_ID=container-client \
+            --env AUTH_COGNITO_SECRET=container-secret \
+            --env AUTH_COGNITO_ISSUER=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_container \
+            --env AUTH_SECRET=container-only-secret-with-at-least-32-characters \
+            --env AWS_REGION=us-east-1 \
+            --env USER_REGISTRY_TABLE=container-users \
+            --env UPLOAD_BUCKET=container-uploads \
+            --env SESSION_DOCUMENT_NAME=container-terminal \
+            agentformation-web:test
+          trap 'docker stop agentformation-web-test >/dev/null 2>&1 || true' EXIT
+          for _ in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:3000/api/health | grep -F '"status":"ok"' && \
+              curl --fail --silent --show-error http://127.0.0.1:3000/ | grep -F AgentFormation; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs agentformation-web-test
+          exit 1
+
+  infrastructure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.13'
+      - run: python -m pip install cfn-lint==1.55.1
+      - run: shellcheck -x -P SCRIPTDIR scripts/*.sh scripts/lib/*.sh agentformation
+      - run: cfn-lint templates/*.yaml

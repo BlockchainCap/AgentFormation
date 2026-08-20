@@ -1,0 +1,12 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+agentformation.local.json
+.agentformation/
+coverage/
+node_modules/
+web/.next/
+web/out/
+web/node_modules/
+*.log

@@ -1,0 +1,34 @@
+name: Bug report
+description: Report a reproducible AgentFormation problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, account IDs, private email addresses, terminal contents, or customer data.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include safe, redacted error text and the smallest reproduction.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Deployment, Authentication, Runtime, Web terminal, Documentation, Other]
+    validations:
+      required: true

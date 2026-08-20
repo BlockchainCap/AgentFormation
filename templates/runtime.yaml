@@ -1,0 +1,192 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: One private, persistent AgentFormation runtime assigned to one Cognito subject.
+
+Parameters:
+  DeploymentName:
+    Type: String
+    AllowedPattern: '^[a-z][a-z0-9-]{2,31}$'
+  NetworkStackName:
+    Type: String
+    MinLength: 1
+  UserSubject:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 128
+  AmiParameterPath:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+  InstanceType:
+    Type: String
+    Default: m7g.xlarge
+    AllowedValues: [t4g.medium, t4g.large, c7g.large, c7g.xlarge, m7g.large, m7g.xlarge, t3.medium, t3.large, c7i.large, c7i.xlarge, m7i.large, m7i.xlarge]
+  Architecture:
+    Type: String
+    Default: arm64
+    AllowedValues: [arm64, x86_64]
+  VolumeSizeGiB:
+    Type: Number
+    Default: 50
+    MinValue: 20
+    MaxValue: 1024
+  ClaudeModelId:
+    Type: String
+    MinLength: 1
+    MaxLength: 256
+    AllowedPattern: '^[A-Za-z0-9._:/-]+$'
+  CodexModelId:
+    Type: String
+    MinLength: 1
+    MaxLength: 256
+    AllowedPattern: '^[A-Za-z0-9._:/-]+$'
+  UploadBucketName:
+    Type: String
+    MinLength: 3
+
+Rules:
+  MatchArchitectureAndRuntime:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref Architecture, arm64]
+            - !Contains [[t4g.medium, t4g.large, c7g.large, c7g.xlarge, m7g.large, m7g.xlarge], !Ref InstanceType]
+          - !And
+            - !Equals [!Ref Architecture, x86_64]
+            - !Contains [[t3.medium, t3.large, c7i.large, c7i.xlarge, m7i.large, m7i.xlarge], !Ref InstanceType]
+        AssertDescription: Runtime instance type must match the selected AMI architecture.
+
+Resources:
+  RuntimeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: InvokeConfiguredBedrockModels
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: InvokeModels
+                Effect: Allow
+                Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/*'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*'
+              - Sid: DiscoverModels
+                Effect: Allow
+                Action: [bedrock:ListFoundationModels, bedrock:GetFoundationModel, bedrock:ListInferenceProfiles, bedrock:GetInferenceProfile]
+                Resource: '*'
+              - Sid: InvokeConfiguredOpenAIModel
+                Effect: Allow
+                Action: bedrock-mantle:CreateInference
+                Resource: !Sub 'arn:${AWS::Partition}:bedrock-mantle:${AWS::Region}:${AWS::AccountId}:project/default'
+                Condition:
+                  StringEquals:
+                    bedrock-mantle:Model: !Ref CodexModelId
+              - Sid: AllowMantleModelAutoEnablement
+                Effect: Allow
+                Action: [aws-marketplace:Subscribe, aws-marketplace:ViewSubscriptions]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:CalledViaLast: bedrock-mantle.amazonaws.com
+        - PolicyName: ReadAssignedUploads
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject]
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${UploadBucketName}/uploads/${UserSubject}/*'
+              - Effect: Allow
+                Action: s3:GetBucketLocation
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${UploadBucketName}'
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
+  RuntimeInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref RuntimeRole]
+
+  RuntimeInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiParameterPath
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref RuntimeInstanceProfile
+      SubnetId:
+        Fn::ImportValue: !Sub '${NetworkStackName}-PrivateSubnetId'
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub '${NetworkStackName}-RuntimeSecurityGroupId'
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: !Ref VolumeSizeGiB
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec > >(tee /var/log/agentformation-bootstrap.log) 2>&1
+
+          install -d -m 0750 -o agentformation -g agentformation /workspace
+          install -d -m 0700 -o agentformation -g agentformation /home/agentformation/.codex
+
+          cat >/etc/profile.d/agentformation.sh <<'PROFILE'
+          export AWS_REGION='${AWS::Region}'
+          export AWS_DEFAULT_REGION='${AWS::Region}'
+          export CLAUDE_CODE_USE_BEDROCK=1
+          export ANTHROPIC_MODEL='${ClaudeModelId}'
+          export DISABLE_UPDATES=1
+          export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+          PROFILE
+          chmod 0644 /etc/profile.d/agentformation.sh
+
+          cat >/home/agentformation/.codex/config.toml <<'CODEX'
+          model_provider = "amazon-bedrock"
+          model = "${CodexModelId}"
+
+          [model_providers.amazon-bedrock.aws]
+          region = "${AWS::Region}"
+          CODEX
+          chown -R agentformation:agentformation /home/agentformation/.codex
+          chmod 0600 /home/agentformation/.codex/config.toml
+
+          cat >/workspace/README.md <<'README'
+          # Your AgentFormation workspace
+
+          Create project folders directly inside `/workspace`.
+
+          - Run `claude` for Claude Code through Amazon Bedrock.
+          - Run `codex` for Codex through Amazon Bedrock.
+          - Browser terminals reconnect to persistent tmux sessions.
+
+          Tool settings and AWS credentials stay in the runtime user's home directory.
+          README
+          chown agentformation:agentformation /workspace/README.md
+          chmod 0644 /workspace/README.md
+
+          systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service
+      Tags:
+        - { Key: Name, Value: !Sub '${AWS::StackName}-runtime' }
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+        - { Key: AgentFormationManaged, Value: 'true' }
+        - { Key: AgentFormationUserSubject, Value: !Ref UserSubject }
+
+Outputs:
+  InstanceId:
+    Value: !Ref RuntimeInstance
+  RuntimeState:
+    Value: active

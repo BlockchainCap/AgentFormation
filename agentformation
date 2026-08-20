@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMMAND="${1:-help}"
+if [[ $# -gt 0 ]]; then shift; fi
+
+case "$COMMAND" in
+  doctor|deploy|status|destroy)
+    exec "$ROOT_DIR/scripts/$COMMAND.sh" "$@"
+    ;;
+  users)
+    SUBCOMMAND="${1:-help}"
+    if [[ $# -gt 0 ]]; then shift; fi
+    case "$SUBCOMMAND" in
+      add|disable|purge)
+        exec "$ROOT_DIR/scripts/users-$SUBCOMMAND.sh" "$@"
+        ;;
+      *)
+        echo "Usage: ./agentformation users {add|disable|purge}" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  help|-h|--help)
+    cat <<'HELP'
+AgentFormation guided deployment
+
+Usage:
+  ./agentformation doctor
+  ./agentformation deploy
+  ./agentformation status
+  ./agentformation users add [--email ADDRESS] [--suppress-invite]
+  ./agentformation users disable [--email ADDRESS]
+  ./agentformation users purge [--email ADDRESS] --confirm DELETE
+  ./agentformation destroy --confirm DELETE
+
+Options are read from agentformation.local.json. AWS_PROFILE and AWS_REGION
+can override the local configuration without being written to disk.
+HELP
+    ;;
+  *)
+    echo "Unknown command: $COMMAND" >&2
+    exit 2
+    ;;
+esac
