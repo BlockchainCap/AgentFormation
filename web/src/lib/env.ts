@@ -12,13 +12,26 @@ export function getAwsRegion(): string {
   return process.env.AWS_REGION?.trim() || "us-east-1";
 }
 
+export function getPublicOrigin(): string {
+  return new URL(required("AUTH_URL")).origin;
+}
+
 export function getAuthEnvironment() {
   return {
     clientId: required("AUTH_COGNITO_ID"),
     clientSecret: required("AUTH_COGNITO_SECRET"),
+    identityProvider: required("AUTH_COGNITO_IDENTITY_PROVIDER"),
     issuer: required("AUTH_COGNITO_ISSUER"),
     secret: required("AUTH_SECRET"),
   };
+}
+
+export function getDeploymentName(): string {
+  return required("AGENTFORMATION_DEPLOYMENT");
+}
+
+export function getProvisioningStateMachineArn(): string {
+  return required("PROVISIONING_STATE_MACHINE_ARN");
 }
 
 export function getRegistryTableName(): string {

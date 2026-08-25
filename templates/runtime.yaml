@@ -1,20 +1,21 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: One private, persistent AgentFormation runtime assigned to one Cognito subject.
+Description: One private, persistent AgentFormation runtime assigned to one federated subject.
 
 Parameters:
   DeploymentName:
     Type: String
     AllowedPattern: '^[a-z][a-z0-9-]{2,31}$'
-  NetworkStackName:
-    Type: String
-    MinLength: 1
+  RuntimeSubnetId:
+    Type: AWS::EC2::Subnet::Id
+  RuntimeSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
   UserSubject:
     Type: String
     NoEcho: true
     MinLength: 8
     MaxLength: 128
-  AmiParameterPath:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+  AmiId:
+    Type: AWS::EC2::Image::Id
   InstanceType:
     Type: String
     Default: m7g.xlarge
@@ -33,6 +34,11 @@ Parameters:
     MinLength: 1
     MaxLength: 256
     AllowedPattern: '^[A-Za-z0-9._:/-]+$'
+  ClaudeInferenceProfileArn:
+    Type: String
+    MinLength: 20
+  ClaudeFoundationModelArns:
+    Type: CommaDelimitedList
   CodexModelId:
     Type: String
     MinLength: 1
@@ -58,6 +64,7 @@ Resources:
   RuntimeRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub '${AWS::StackName}-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -71,17 +78,29 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: InvokeModels
+              - Sid: InvokeConfiguredInferenceProfile
                 Effect: Allow
                 Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
-                Resource:
-                  - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/*'
-                  - !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*'
-                  - !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*'
-              - Sid: DiscoverModels
+                Resource: !Ref ClaudeInferenceProfileArn
+              - Sid: InvokeConfiguredFoundationModelsThroughProfile
                 Effect: Allow
-                Action: [bedrock:ListFoundationModels, bedrock:GetFoundationModel, bedrock:ListInferenceProfiles, bedrock:GetInferenceProfile]
+                Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+                Resource: !Ref ClaudeFoundationModelArns
+                Condition:
+                  StringEquals:
+                    bedrock:InferenceProfileArn: !Ref ClaudeInferenceProfileArn
+              - Sid: ListModelMetadata
+                Effect: Allow
+                Action: [bedrock:ListFoundationModels, bedrock:ListInferenceProfiles]
                 Resource: '*'
+              - Sid: ReadConfiguredModelMetadata
+                Effect: Allow
+                Action: bedrock:GetFoundationModel
+                Resource: !Ref ClaudeFoundationModelArns
+              - Sid: ReadConfiguredInferenceProfile
+                Effect: Allow
+                Action: bedrock:GetInferenceProfile
+                Resource: !Ref ClaudeInferenceProfileArn
               - Sid: InvokeConfiguredOpenAIModel
                 Effect: Allow
                 Action: bedrock-mantle:CreateInference
@@ -112,18 +131,17 @@ Resources:
   RuntimeInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
+      InstanceProfileName: !Sub '${AWS::StackName}-profile'
       Roles: [!Ref RuntimeRole]
 
   RuntimeInstance:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: !Ref AmiParameterPath
+      ImageId: !Ref AmiId
       InstanceType: !Ref InstanceType
       IamInstanceProfile: !Ref RuntimeInstanceProfile
-      SubnetId:
-        Fn::ImportValue: !Sub '${NetworkStackName}-PrivateSubnetId'
-      SecurityGroupIds:
-        - Fn::ImportValue: !Sub '${NetworkStackName}-RuntimeSecurityGroupId'
+      SubnetId: !Ref RuntimeSubnetId
+      SecurityGroupIds: [!Ref RuntimeSecurityGroupId]
       MetadataOptions:
         HttpEndpoint: enabled
         HttpTokens: required

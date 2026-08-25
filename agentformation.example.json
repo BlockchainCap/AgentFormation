@@ -1,7 +1,12 @@
 {
   "deploymentName": "agentformation",
   "region": "us-east-1",
+  "publicUrl": "",
   "networkMode": "private-nat",
+  "identityCenter": {
+    "metadataUrl": "",
+    "metadataFile": ""
+  },
   "runtime": {
     "architecture": "arm64",
     "instanceType": "m7g.xlarge",
@@ -12,12 +17,8 @@
     "codex": "openai.gpt-5.6-sol"
   },
   "versions": {
+    "awsCli": "2.36.29",
     "claudeCode": "2.1.235",
     "codex": "0.148.0"
-  },
-  "users": [
-    {
-      "email": "admin@example.com"
-    }
-  ]
+  }
 }

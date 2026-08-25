@@ -34,6 +34,7 @@ jobs:
         env:
           AUTH_COGNITO_ID: build-client
           AUTH_COGNITO_SECRET: build-secret
+          AUTH_COGNITO_IDENTITY_PROVIDER: IdentityCenter
           AUTH_COGNITO_ISSUER: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_build
           AUTH_SECRET: build-only-secret-with-at-least-32-characters
           AWS_REGION: us-east-1
@@ -51,6 +52,7 @@ jobs:
             --env AUTH_TRUST_HOST=true \
             --env AUTH_COGNITO_ID=container-client \
             --env AUTH_COGNITO_SECRET=container-secret \
+            --env AUTH_COGNITO_IDENTITY_PROVIDER=IdentityCenter \
             --env AUTH_COGNITO_ISSUER=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_container \
             --env AUTH_SECRET=container-only-secret-with-at-least-32-characters \
             --env AWS_REGION=us-east-1 \

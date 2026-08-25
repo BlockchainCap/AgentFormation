@@ -1,15 +1,24 @@
 # Privacy notes
 
-AgentFormation is self-hosted in the operator's AWS account. The project itself
-does not run a hosted service or receive deployment data.
+AgentFormation is self-hosted in the operator's AWS account. The open-source
+project does not run a hosted service or receive deployment data.
 
-The deployed system stores:
+The deployed system stores or processes:
 
-- invited users' email addresses and Cognito identifiers;
-- the mapping between a user and an EC2 runtime;
+- assigned employees' email addresses and federated Cognito identifiers;
+- the mapping between an employee and an EC2 runtime;
+- environment-creation status and AWS Step Functions execution history;
 - encrypted runtime files on EBS;
 - uploaded files in S3 until copied or expired; and
 - normal AWS service, access, build, and application logs.
+
+The IAM Identity Center metadata address or downloaded XML contains
+organization-specific SAML endpoints and public signing certificates. The
+address belongs only in ignored `agentformation.local.json`; a fallback XML file
+belongs in the ignored `.agentformation/` directory. Neither should be committed
+or posted publicly, even though the signing certificate is public and no private
+signing key is included. The address is preferred because Cognito can refresh
+updated metadata automatically.
 
 Terminal traffic uses AWS Systems Manager. Prompts and code sent to Claude Code or
 Codex are processed through Amazon Bedrock under the operator's AWS agreement and

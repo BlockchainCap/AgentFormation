@@ -1,0 +1,7 @@
+interface:
+  display_name: "Migrate Agent Configs"
+  short_description: "Move local agent state to AgentFormation"
+  default_prompt: "Use $migrate-agent-configs to safely move my approved Codex and Claude Code settings into my assigned AgentFormation runtime."
+
+policy:
+  allow_implicit_invocation: true

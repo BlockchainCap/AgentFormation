@@ -4,10 +4,12 @@ AgentFormation is a community reference project for deploying private, persisten
 
 ## Boundaries
 
-- Never commit real email addresses, AWS account IDs, credentials, generated passwords, deployment state, or environment-specific resource names.
+- Never commit real email addresses, AWS account IDs, credentials, IAM Identity Center metadata addresses or XML, deployment state, or environment-specific resource names.
 - `agentformation.local.json`, `.env*`, and `.agentformation/` are local-only.
-- Cognito subjects, not browser-supplied instance IDs or email strings, are the authorization boundary.
-- An AWS account administrator is trusted. The application isolates invited users from each other; it cannot isolate resources from the administrator who owns the AWS account.
+- Federated Cognito subjects, not browser-supplied instance IDs or email strings, are the authorization boundary.
+- IAM Identity Center group assignment is the only employee login. Do not add a local password, self-sign-up, or app-specific MFA.
+- The web role may start only the fixed provisioning state machine. Keep runtime templates and operator-selected AWS parameters out of browser input.
+- An AWS account administrator is trusted. The application isolates assigned users from each other; it cannot isolate resources from the administrator who owns the AWS account.
 - Keep GitHub Actions validation-only. Do not add an AWS deployment workflow or static AWS credentials.
 
 ## Commands

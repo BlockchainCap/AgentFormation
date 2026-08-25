@@ -1,92 +1,159 @@
 # AgentFormation
 
-An AWS-native solution template for persistent remote coding agents.
+An AWS-native template for private, persistent remote coding environments.
 
-AgentFormation gives each invited user a private EC2 workspace with both
+AgentFormation gives each approved employee a private EC2 workspace with both
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
-[Codex](https://developers.openai.com/codex/) configured to use Amazon Bedrock.
-A small web app provides authenticated browser terminals, persistent `tmux`
-sessions, and file uploads. Everything deploys into an AWS account you control.
+[Codex](https://developers.openai.com/codex/) configured for Amazon Bedrock. A
+small web app provides browser terminals, persistent `tmux` sessions, and file
+uploads. Everything runs in an AWS account you control.
+
+Employees sign in with the same AWS IAM Identity Center account they already use
+for company AWS access. AgentFormation does not keep a separate username,
+password, or authenticator-app setting. An administrator normally assigns a
+dedicated AgentFormation access group to the app, and each assigned employee can
+create exactly one reviewed coding environment for themself.
 
 > [!IMPORTANT]
-> The first deployment builds a complete runtime image and an App Runner service.
+> The first complete deployment builds a runtime image and an App Runner service.
 > It commonly takes more than 30 minutes. This is normal for the AWS services used
-> by this template, not a frozen terminal.
+> by the template, not a frozen terminal.
 
 ## What it creates
 
 ```text
-invited user -> Cognito sign-in -> App Runner web terminal
-                                      |
-                                      v
-                               DynamoDB assignment
-                                      |
-                                      v
-                           private EC2 runtime (one/user)
-                             Claude Code + Codex + /workspace
-                                      |
-                                      v
-                              Amazon Bedrock models
+assigned employee group
+        |
+        v
+AWS IAM Identity Center --SAML--> Cognito bridge --OIDC--> App Runner
+                                                           web terminal
+                                                                |
+                                            Create environment  |
+                                                                v
+                                                restricted setup job
+                                                                |
+                                                                v
+                                                private EC2 runtime
+                                          Claude Code + Codex + /workspace
+                                                                |
+                                                                v
+                                                    Amazon Bedrock models
 ```
 
-- Amazon Cognito with self-sign-up disabled
+- IAM Identity Center group assignment as the only employee sign-in
+- Amazon Cognito as an invisible SAML-to-OIDC bridge, with local sign-in excluded
 - one private VPC subnet and one NAT gateway by default
-- one private, encrypted EC2 runtime and EBS volume per user
+- one private, encrypted EC2 runtime and EBS volume per employee
 - AWS Systems Manager Session Manager instead of inbound SSH
 - an EC2 Image Builder pipeline with pinned Claude Code and Codex versions
 - an App Runner web terminal
+- a restricted Step Functions job that can create only the reviewed runtime stack
 - a DynamoDB identity-to-runtime registry
 - a short-lived, encrypted S3 upload staging area
 
-You do **not** need AWS Organizations, Google Workspace, or Google OAuth. You do
-need an AWS account, an AWS CLI profile with permission to create the resources,
-Docker with `buildx`, `jq`, and access to the selected Bedrock models.
+You need an organization instance of IAM Identity Center, permission to add a
+customer-managed SAML application and assign a group, an AWS CLI profile that can
+deploy the resources, Docker with `buildx`, `jq`, and access to the selected
+Bedrock models. The AWS root user is deliberately not an app login. Root is a
+separate emergency identity and should not be used for daily work.
 
-If your organization requires CloudFormation to use an existing service role,
-add its ARN as `cloudFormationRoleArn` in `agentformation.local.json`. The example
-omits it because most personal AWS accounts do not need one.
+AWS does not expose customer-managed SAML application creation or attribute
+mapping through its public CLI, API, or CloudFormation resource. Creating the
+Identity Center application and entering its two attribute mappings is therefore
+a one-time console step; AgentFormation automates the Cognito side and the rest of
+the deployment.
+
+If CloudFormation must use an existing service role, add its ARN as
+`cloudFormationRoleArn` in `agentformation.local.json`. The example omits it
+because not every account requires one.
 
 ## Quick start
 
-1. Clone the repository and create a private local configuration:
+1. Clone the repository and create the private local configuration:
 
    ```bash
    cp agentformation.example.json agentformation.local.json
-   ```
-
-2. Replace `admin@example.com`, review the instance size and Bedrock model IDs,
-   then run:
-
-   ```bash
    AWS_PROFILE=your-profile ./agentformation doctor
    AWS_PROFILE=your-profile ./agentformation deploy
    ```
 
-3. Open the printed web address and use the temporary password from the Cognito
-   invitation. Cognito asks you to choose a permanent password on first sign-in.
+   The first deploy creates only enough identity infrastructure to print the
+   exact SAML ACS URL and audience, then stops safely.
 
-The deployment command is safe to run again. CloudFormation applies changes and
-the user command keeps the same runtime stack for an existing Cognito identity.
-It reuses the newest tested AMI from the current pipeline; set
-`AGENTFORMATION_REBUILD_IMAGE=1` when you intentionally want a fresh runtime
-image with otherwise unchanged settings.
+2. In IAM Identity Center, create a customer-managed SAML 2.0 application using
+   those two printed values. Map SAML `Subject` to `${user:subject}` with the
+   `persistent` format, map `email` to `${user:email}` with the `unspecified`
+   format, assign a dedicated AgentFormation access group, add one test employee
+   directly to that group, and
+   copy the HTTPS address shown for the **IAM Identity Center SAML metadata
+   file**. Using the address lets Cognito refresh signing certificates
+   automatically. If your console offers only a download, save the XML file
+   instead.
+
+3. Put the metadata address in the ignored private config and deploy again. Do
+   not commit the organization-specific address:
+
+   ```bash
+   # In agentformation.local.json, set identityCenter.metadataUrl to the HTTPS
+   # address from IAM Identity Center and leave metadataFile empty.
+   AWS_PROFILE=your-profile ./agentformation doctor
+   AWS_PROFILE=your-profile ./agentformation deploy
+   ```
+
+   If you downloaded XML instead, save it as
+   `.agentformation/identity-center-metadata.xml`, leave `metadataUrl` empty, and
+   set `metadataFile` to that path. Set only one metadata source.
+
+4. Open the printed web address and choose **Continue with company SSO**. If your
+   company SSO session is still active, there is normally no second prompt. Choose
+   **Create environment** once; the reviewed AWS job creates your private runtime.
+
+5. As the optional final setup step, migrate a person's existing Codex and Claude
+   Code preferences or approved session history into their assigned runtime. Start
+   Codex from this repository and invoke `$migrate-agent-configs`; it begins with a
+   read-only inventory and requires separate approval before moving credentials or
+   chats. Follow the
+   [local agent migration guide](docs/migrating-local-agent-configs.md).
+
+See [the complete IAM Identity Center setup guide](docs/identity-center-setup.md)
+for the exact console fields and group-assignment steps.
+
+The deploy command is safe to run again. CloudFormation applies reviewed changes
+without creating a second runtime for an existing company identity. The latest
+tested AMI is reused; set `AGENTFORMATION_REBUILD_IMAGE=1` only when you
+intentionally want a fresh image with otherwise unchanged settings.
+
+### Custom web address
+
+App Runner supplies a working HTTPS address automatically. To use a company
+address instead, first associate that custom domain with the App Runner service
+and publish the certificate-validation and traffic records requested by App
+Runner through your DNS provider. Wait until App Runner reports the domain as
+active, then put only the origin in the ignored local configuration:
+
+```json
+"publicUrl": "https://agents.example.com"
+```
+
+Run `./agentformation doctor` and `./agentformation deploy` again. The deploy
+command uses that address for Auth.js, Cognito callbacks and logout, browser
+upload restrictions, and status output. Do not commit a company hostname to the
+public repository. Leave `publicUrl` empty to keep using the generated App Runner
+address.
 
 ## Daily administration
 
 ```bash
-# Show shared stacks, users, runtimes, and the web address
+# Show shared stacks, employee runtimes, and the web address
 AWS_PROFILE=your-profile ./agentformation status
 
-# Invite a user and create one runtime
-AWS_PROFILE=your-profile ./agentformation users add --email person@example.com
-
-# Block sign-in and stop the runtime while preserving its disk
+# Immediately block app sign-in and stop compute while preserving the disk
 AWS_PROFILE=your-profile ./agentformation users disable --email person@example.com
 
-# Re-enable the identity and restart its preserved runtime
-AWS_PROFILE=your-profile ./agentformation users add --email person@example.com
+# Restore app sign-in and restart the preserved runtime
+AWS_PROFILE=your-profile ./agentformation users enable --email person@example.com
 
-# Permanently delete a user, runtime, and runtime disk
+# Permanently delete the app identity, runtime, and runtime disk
 AWS_PROFILE=your-profile ./agentformation users purge \
   --email person@example.com --confirm DELETE
 
@@ -94,26 +161,32 @@ AWS_PROFILE=your-profile ./agentformation users purge \
 AWS_PROFILE=your-profile ./agentformation destroy --confirm DELETE
 ```
 
-Users start in `/workspace`. They can create project folders directly underneath
-it. Closing a browser does not kill the `tmux` session, so reconnecting returns to
-the same terminal process.
+Group assignment in IAM Identity Center is the source of truth. Remove an
+employee from the assigned group when access should end. Use `users disable` for
+an immediate app-side block that preserves their disk. Remove the group assignment
+before `users purge`; otherwise the still-approved employee can sign in again and
+create a new environment.
+
+Users start in `/workspace`. Closing a browser does not kill the `tmux` session,
+so reconnecting returns to the same terminal process.
 
 ## Security model
 
 AgentFormation isolates ordinary app users from one another, but the AWS account
-administrator remains trusted and can inspect or change all resources. The browser
-cannot choose an instance ID; the server derives the signed-in Cognito subject and
-looks up its assigned runtime. Runtimes have no public IP and no inbound security
-group rules.
+administrator remains trusted and can inspect or change all resources. The
+browser cannot choose an instance ID. The server uses the signed-in federated
+Cognito subject to find the assigned runtime, and the setup job accepts only a
+fixed, content-hashed CloudFormation template and fixed operator-selected values.
+Runtimes have no public IP and no inbound security group rules.
 
 Read [the security model](docs/security-model.md) and
-[the privacy notes](docs/privacy.md) before inviting users. To report a
+[the privacy notes](docs/privacy.md) before assigning users. To report a
 vulnerability, follow [SECURITY.md](SECURITY.md).
 
 ## Cost and cleanup
 
-This is not a free-tier-only template. The main always-on or usage-based costs are
-App Runner, a NAT gateway, one EC2 instance and EBS volume per user, Image Builder,
+This is not a free-tier-only template. The main costs are App Runner, a NAT
+gateway, one EC2 instance and EBS volume per user, Image Builder, Step Functions,
 S3, DynamoDB, and Bedrock requests. Check the
 [AWS Pricing Calculator](https://calculator.aws/) for your region and sizes.
 Disabling a user stops EC2 compute but preserves EBS storage. Use `purge` or
@@ -122,23 +195,13 @@ Disabling a user stops EC2 compute but preserves EBS storage. Use `purge` or
 ## Development
 
 ```bash
-cd web
-bun install --frozen-lockfile
-bun audit
-bun run format:check
-bun run lint
-bun run typecheck
-bun run test
-bun run build
-
-cd ..
-shellcheck -x -P SCRIPTDIR scripts/*.sh scripts/lib/*.sh agentformation
-cfn-lint templates/*.yaml
+./scripts/check.sh
 ```
 
-Pull requests run these checks without receiving AWS credentials. A full AWS
-deployment is deliberately a maintainer-run release check because it creates
-billable resources and requires account-specific Bedrock access.
+The check runs the frozen install, dependency audit, formatting, lint, types,
+tests, production build, shell checks, and CloudFormation lint. Pull requests do
+not receive AWS credentials. A full AWS deployment remains a maintainer-run check
+because it creates billable resources and uses account-specific Bedrock access.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and the
 [maintainer release checklist](docs/maintainer-release-checklist.md).

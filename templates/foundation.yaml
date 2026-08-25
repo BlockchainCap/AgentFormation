@@ -17,6 +17,13 @@ Parameters:
     Type: String
     Default: http://localhost:3000/
     AllowedPattern: '^https?://[^ ]+$'
+  ConfigureCaseInsensitiveUsernames:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+Conditions:
+  UseCaseInsensitiveUsernames: !Equals [!Ref ConfigureCaseInsensitiveUsernames, 'true']
 
 Resources:
   UserPool:
@@ -25,24 +32,13 @@ Resources:
       UserPoolName: !Sub '${AWS::StackName}-users'
       UsernameAttributes: [email]
       AutoVerifiedAttributes: [email]
+      MfaConfiguration: 'OFF'
       AdminCreateUserConfig:
         AllowAdminCreateUserOnly: true
-      AccountRecoverySetting:
-        RecoveryMechanisms:
-          - Name: verified_email
-            Priority: 1
-      Policies:
-        PasswordPolicy:
-          MinimumLength: 14
-          RequireLowercase: true
-          RequireNumbers: true
-          RequireSymbols: true
-          RequireUppercase: true
-          TemporaryPasswordValidityDays: 7
-      MfaConfiguration: OPTIONAL
-      EnabledMfas: [SOFTWARE_TOKEN_MFA]
-      UserAttributeUpdateSettings:
-        AttributesRequireVerificationBeforeUpdate: [email]
+      UsernameConfiguration: !If
+        - UseCaseInsensitiveUsernames
+        - { CaseSensitive: false }
+        - !Ref AWS::NoValue
       UserPoolTags:
         AgentFormationDeployment: !Ref DeploymentName
 
@@ -58,7 +54,7 @@ Resources:
       ClientName: !Sub '${AWS::StackName}-web'
       UserPoolId: !Ref UserPool
       GenerateSecret: true
-      SupportedIdentityProviders: [COGNITO]
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [code]
       AllowedOAuthScopes: [openid, email, profile]
@@ -76,6 +72,11 @@ Resources:
 
   UserRegistry:
     Type: AWS::DynamoDB::Table
+    Metadata:
+      checkov:
+        skip:
+          - id: CKV_AWS_119
+            comment: AWS-managed DynamoDB encryption is enabled; a per-deployment customer key adds cost and key lifecycle risk without changing the app isolation boundary.
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
@@ -93,6 +94,13 @@ Resources:
 
   UploadBucket:
     Type: AWS::S3::Bucket
+    Metadata:
+      checkov:
+        skip:
+          - id: CKV_AWS_18
+            comment: Account-wide audit logging belongs to the operator; a second project log bucket would retain employee object-access metadata and complicate complete cleanup.
+          - id: CKV_AWS_21
+            comment: This is a one-day staging bucket; versioning would retain deleted upload contents and make the documented privacy deletion behavior misleading.
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
@@ -116,8 +124,31 @@ Resources:
       Tags:
         - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
 
+  UploadBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UploadBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:s3:::${UploadBucket}'
+              - !Sub 'arn:${AWS::Partition}:s3:::${UploadBucket}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
   WebRepository:
     Type: AWS::ECR::Repository
+    Metadata:
+      checkov:
+        skip:
+          - id: CKV_AWS_136
+            comment: ECR uses AWS-managed encryption at rest; a customer key is optional operator policy, not an application trust-boundary control.
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
@@ -131,6 +162,11 @@ Resources:
 
   AuthSecret:
     Type: AWS::SecretsManager::Secret
+    Metadata:
+      checkov:
+        skip:
+          - id: CKV_AWS_149
+            comment: Secrets Manager uses its AWS-managed encryption key; a customer key would add recurring cost and separate key deletion handling to this reference deployment.
     Properties:
       Description: AgentFormation Auth.js session secret.
       GenerateSecretString:
@@ -141,6 +177,11 @@ Resources:
 
   CognitoClientSecret:
     Type: AWS::SecretsManager::Secret
+    Metadata:
+      checkov:
+        skip:
+          - id: CKV_AWS_149
+            comment: Secrets Manager uses its AWS-managed encryption key; a customer key would add recurring cost and separate key deletion handling to this reference deployment.
     Properties:
       Description: Populated by the guided deploy command from the Cognito client.
       SecretString: pending-deploy
@@ -175,7 +216,7 @@ Resources:
               export SHELL=/bin/bash
               export PATH=/home/agentformation/.local/bin:/usr/local/bin:/usr/bin:/bin
               cd /workspace
-              exec tmux new-session -A -s '{{ tmuxSession }}' -c /workspace
+              exec tmux set-option -g mouse on \; set-option -g history-limit 100000 \; new-session -A -s '{{ tmuxSession }}' -c /workspace
       Tags:
         - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
 
@@ -188,6 +229,10 @@ Outputs:
     Value: !Sub 'https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${UserPool}'
   CognitoDomain:
     Value: !Sub 'https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com'
+  CognitoSamlAcsUrl:
+    Value: !Sub 'https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com/saml2/idpresponse'
+  CognitoSamlAudience:
+    Value: !Sub 'urn:amazon:cognito:sp:${UserPool}'
   UserRegistryTableName:
     Value: !Ref UserRegistry
   UploadBucketName:
