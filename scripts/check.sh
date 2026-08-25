@@ -16,7 +16,10 @@ bun run test
 AUTH_SECRET=build-only-secret-with-at-least-32-characters \
 AUTH_COGNITO_ID=build-client \
 AUTH_COGNITO_SECRET=build-secret \
+AUTH_COGNITO_IDENTITY_PROVIDER=IdentityCenter \
 AUTH_COGNITO_ISSUER=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_build \
+AGENTFORMATION_DEPLOYMENT=agentformation \
+PROVISIONING_STATE_MACHINE_ARN=arn:aws:states:us-east-1:000000000000:stateMachine:build-only \
 AWS_REGION=us-east-1 \
 USER_REGISTRY_TABLE=build-users \
 UPLOAD_BUCKET=build-uploads \

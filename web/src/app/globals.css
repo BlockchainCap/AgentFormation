@@ -87,6 +87,21 @@
     touch-action: manipulation;
     font-family: var(--font-mono);
   }
+  button:not(:disabled),
+  a[href],
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 .xterm {
@@ -103,4 +118,17 @@
 
 .xterm .xterm-viewport::-webkit-scrollbar {
   display: none;
+}
+
+@media (pointer: coarse) {
+  .terminal-touch-pane .xterm,
+  .terminal-touch-pane .xterm * {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .terminal-touch-pane .xterm {
+    pointer-events: none;
+  }
 }

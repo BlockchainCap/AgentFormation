@@ -32,6 +32,7 @@ aws_cli() {
 network_stack() { printf '%s-network\n' "$(deployment_name)"; }
 foundation_stack() { printf '%s-foundation\n' "$(deployment_name)"; }
 image_stack() { printf '%s-image\n' "$(deployment_name)"; }
+provisioning_stack() { printf '%s-provisioning\n' "$(deployment_name)"; }
 web_stack() { printf '%s-web\n' "$(deployment_name)"; }
 ami_parameter_path() { printf '/agentformation/%s/runtime-ami\n' "$(deployment_name)"; }
 
@@ -54,6 +55,49 @@ hash_text() {
 
 normalize_email() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | xargs
+}
+
+find_cognito_user_by_email() {
+  local user_pool_id="$1"
+  local email="$2"
+  local users
+  users="$(aws_cli cognito-idp list-users \
+    --user-pool-id "$user_pool_id" \
+    --output json)"
+  users="$(jq -c --arg email "$email" '
+    [.Users[] | select(
+      ([.Attributes[] | select(.Name == "email") | .Value][0] // "" | ascii_downcase) == $email
+    )]
+  ' <<<"$users")"
+  [[ "$(jq 'length' <<<"$users")" == "1" ]] || \
+    fail "Expected exactly one federated user for that email address"
+  jq -er '.[0] | [.Username, (.Attributes[] | select(.Name == "sub").Value)] | @tsv' <<<"$users"
+}
+
+stop_provisioning_executions() {
+  local user_sub="$1"
+  local state_machine_arn executions execution_arn input_subject
+  if ! aws_cli cloudformation describe-stacks --stack-name "$(provisioning_stack)" >/dev/null 2>&1; then
+    return
+  fi
+  state_machine_arn="$(stack_output "$(provisioning_stack)" StateMachineArn)"
+  executions="$(aws_cli stepfunctions list-executions \
+    --state-machine-arn "$state_machine_arn" \
+    --status-filter RUNNING \
+    --output json)"
+  while IFS= read -r execution_arn; do
+    [[ -n "$execution_arn" ]] || continue
+    input_subject="$(aws_cli stepfunctions describe-execution \
+      --execution-arn "$execution_arn" \
+      --query input \
+      --output text | jq -r '.subject // ""')"
+    if [[ "$input_subject" == "$user_sub" ]]; then
+      aws_cli stepfunctions stop-execution \
+        --execution-arn "$execution_arn" \
+        --error AdministratorDisabledUser \
+        --cause 'The federated user was disabled by an administrator.' >/dev/null
+    fi
+  done < <(jq -r '.executions[].executionArn' <<<"$executions")
 }
 
 read_option() {

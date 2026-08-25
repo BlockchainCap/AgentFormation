@@ -15,7 +15,7 @@ deploy_stack() {
   arguments=(cloudformation deploy \
     --stack-name "$stack" \
     --template-file "$ROOT_DIR/$template" \
-    --capabilities CAPABILITY_IAM \
+    --capabilities CAPABILITY_NAMED_IAM \
     --no-fail-on-empty-changeset \
     --tags AgentFormationDeployment="$(deployment_name)" \
     --parameter-overrides "$@")
