@@ -127,7 +127,7 @@ Resources:
                     - set -euo pipefail
                     - export DEBIAN_FRONTEND=noninteractive
                     - apt-get update
-                    - apt-get install -y --no-install-recommends bubblewrap build-essential ca-certificates curl docker.io git gnupg jq ripgrep tmux unzip xz-utils
+                    - apt-get install -y --no-install-recommends bubblewrap build-essential ca-certificates curl docker-buildx docker.io git gnupg jq ripgrep tmux unzip xz-utils
                     - apt-get clean
                     - rm -rf /var/lib/apt/lists/*
               - name: InstallAwsCli
@@ -216,6 +216,7 @@ Resources:
                     - node --version | grep -Fx "v${NodeVersion}"
                     - bun --version | grep -Fx "${BunVersion}"
                     - bwrap --version
+                    - docker buildx version
                     - git --version
                     - tmux -V
           - name: test
@@ -233,6 +234,7 @@ Resources:
                     - node --version | grep -Fx "v${NodeVersion}"
                     - bun --version | grep -Fx "${BunVersion}"
                     - bwrap --version
+                    - docker buildx version
                     - systemctl is-enabled docker
                     - systemctl is-active snap.amazon-ssm-agent.amazon-ssm-agent.service
                     - test -d /home/agentformation
