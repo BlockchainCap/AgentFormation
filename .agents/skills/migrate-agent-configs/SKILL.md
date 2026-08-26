@@ -122,6 +122,12 @@ in a local OS keychain and are intentionally not portable. On AgentFormation,
 use the page's **OAuth** helper when a remote MCP login redirects the browser to
 `127.0.0.1` or `localhost`.
 
+Never migrate `~/.aws/credentials`, `~/.aws/sso/cache`, or `~/.aws/cli/cache`.
+The AgentFormation runtime uses its attached instance role for its normal AWS
+access. If the user also needs a personal operator profile on the remote host,
+invoke `$setup-agentformation` there and complete a fresh IAM Identity Center
+device-code login instead of copying credentials or cached tokens.
+
 ## Transfer through SSM
 
 1. Generate a one-time asymmetric key pair inside the remote scratch directory

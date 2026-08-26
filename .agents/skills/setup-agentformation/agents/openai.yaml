@@ -1,0 +1,7 @@
+interface:
+  display_name: "Set Up AgentFormation"
+  short_description: "Prepare AWS access and local tools safely"
+  default_prompt: "Use $setup-agentformation to prepare this computer for AgentFormation without deploying anything yet."
+
+policy:
+  allow_implicit_invocation: true

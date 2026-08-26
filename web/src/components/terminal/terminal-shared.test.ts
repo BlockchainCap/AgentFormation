@@ -45,11 +45,15 @@ describe("terminal tabs", () => {
 });
 
 describe("terminal scrolling", () => {
-  it("uses a calmer wheel and trackpad speed than xterm's defaults", () => {
+  it("uses one-fifth wheel speed and restores normal speed with fast scroll", () => {
     expect(TERMINAL_SCROLL_OPTIONS).toEqual({
-      scrollSensitivity: 0.5,
-      fastScrollSensitivity: 2,
+      scrollSensitivity: 0.2,
+      fastScrollSensitivity: 5,
     });
+    expect(
+      TERMINAL_SCROLL_OPTIONS.scrollSensitivity *
+        TERMINAL_SCROLL_OPTIONS.fastScrollSensitivity,
+    ).toBe(1);
   });
 
   it("keeps vertical wheel input with xterm and horizontal input with the pan view", () => {

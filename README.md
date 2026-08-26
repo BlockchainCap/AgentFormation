@@ -58,6 +58,14 @@ deploy the resources, Docker with `buildx`, `jq`, and access to the selected
 Bedrock models. The AWS root user is deliberately not an app login. Root is a
 separate emergency identity and should not be used for daily work.
 
+Before deploying, follow the
+[workstation setup guide](docs/workstation-setup.md) to install the correct AWS
+CLI and Docker tools for macOS or Linux on `amd64`/`x86_64` or
+`arm64`/`aarch64`. It also explains why the AWS account permission set used by
+the CLI is separate from the Identity Center group assigned to the
+AgentFormation application. For a guided, read-only setup, start Codex from this
+repository and invoke `$setup-agentformation`.
+
 AWS does not expose customer-managed SAML application creation or attribute
 mapping through its public CLI, API, or CloudFormation resource. Creating the
 Identity Center application and entering its two attribute mappings is therefore
@@ -214,6 +222,9 @@ Disabling a user stops EC2 compute but preserves EBS storage. Use `purge` or
 `destroy` when data is no longer needed.
 
 ## Development
+
+Prepare the pinned tools and understand the host-versus-container architecture
+using the [workstation setup guide](docs/workstation-setup.md), then run:
 
 ```bash
 ./scripts/check.sh

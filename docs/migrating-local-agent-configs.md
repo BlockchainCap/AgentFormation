@@ -85,6 +85,11 @@ repository.
 
 ## Portability checks
 
+- Compare `uname -s` and `uname -m` on both computers before moving tool state.
+  `amd64`/`x86_64` and `arm64`/`aarch64` name CPU architectures; Linux and
+  macOS name operating systems. Follow the
+  [workstation setup guide](workstation-setup.md) instead of copying executables
+  or installer caches between platforms.
 - Rewrite paths such as `/Users/name/...` to Linux paths under
   `/home/agentformation` or `/workspace`.
 - Disable local-only MCP servers and tools instead of marking them required and
@@ -96,6 +101,10 @@ repository.
   chats. Do not replace the remote history database with an older local copy.
 - Do not copy macOS Keychain data, sockets, process state, caches, logs,
   `node_modules`, virtual environments, or machine-specific binaries.
+- Do not migrate `~/.aws/credentials`, `~/.aws/sso/cache`, or
+  `~/.aws/cli/cache`. Use the runtime's instance role for normal access and
+  complete a fresh IAM Identity Center device-code login when a personal
+  operator profile is actually needed there.
 - Back up live SQLite databases with SQLite's backup operation before archiving
   them.
 - On macOS, create the archive with Apple metadata disabled. Reject AppleDouble
