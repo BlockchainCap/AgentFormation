@@ -23,6 +23,11 @@ Thanks for helping improve AgentFormation.
 
 ## Checks
 
+If the AWS CLI, Docker, or CPU platform names are unfamiliar, first follow the
+[workstation setup guide](docs/workstation-setup.md). In particular, Linux is an
+operating system while `amd64`/`x86_64` and `arm64`/`aarch64` are CPU
+architectures.
+
 Use the Node.js and Bun versions pinned in `agentformation.example.json` for the
 web app. New AgentFormation runtime images include those versions, so a checkout
 under `/workspace` can run the same checks. From the repository root, the

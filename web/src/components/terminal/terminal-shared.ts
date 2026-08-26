@@ -74,8 +74,8 @@ export const TERMINAL_SCROLL_LINE_PX =
   TERMINAL_FONT_SIZE * TERMINAL_LINE_HEIGHT;
 export const TERMINAL_TOUCH_SCROLL_LINE_PX = TERMINAL_SCROLL_LINE_PX;
 export const TERMINAL_SCROLL_OPTIONS = {
-  scrollSensitivity: 0.5,
-  fastScrollSensitivity: 2,
+  scrollSensitivity: 0.2,
+  fastScrollSensitivity: 5,
 } as const;
 export const TERMINAL_VERTICAL_PADDING_PX = 16;
 export const TERMINAL_GESTURE_LOCK_PX = 8;

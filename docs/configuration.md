@@ -11,21 +11,21 @@ cp agentformation.example.json agentformation.local.json
 
 ## Configuration fields
 
-| Field | What to enter | When to change it |
-| --- | --- | --- |
-| `deploymentName` | A lowercase name using letters, numbers, and hyphens | Keep it stable for the life of one deployment. Changing it creates a separate set of AWS resources. |
-| `region` | The AWS Region for the deployment | Choose a Region supported by the required AWS services and configured Bedrock models. |
-| `publicUrl` | Empty, or the exact `https://` origin of an active App Runner custom domain | Leave empty for the generated App Runner address. Do not add a path or trailing slash. |
-| `networkMode` | `private-nat` or `private-endpoints` | `private-nat` is the normal starting point. The endpoint mode adds AWS service endpoints but still keeps internet access for developer tools. |
-| `identityCenter.metadataUrl` | The private HTTPS metadata address from the customer-managed SAML application | Preferred after the first identity bootstrap. Set only this field or `metadataFile`. |
-| `identityCenter.metadataFile` | A local path to downloaded SAML metadata XML | Use only when IAM Identity Center does not provide a metadata address. A path under `.agentformation/` stays out of Git. |
-| `cloudFormationRoleArn` | An optional, existing CloudFormation service role ARN | Add it only when the AWS account requires CloudFormation to use that role. |
-| `runtime.architecture` | `arm64` or `x86_64` | It must match the selected instance family. ARM is the example default. |
-| `runtime.instanceType` | The EC2 type for each employee environment | Review cost and memory before inviting a group. |
-| `runtime.volumeSizeGiB` | Persistent disk size, from 20 through 1024 GiB | Increasing the default affects newly created environments. |
-| `models.claude` | An active Bedrock inference-profile ID | The deploy check resolves the profile and limits the runtime role to that profile and its current destination models. |
-| `models.codex` | The Bedrock model ID used by Codex | Confirm access, provider terms, and quotas in the deployment Region. |
-| `versions.*` | Exact AWS CLI, Node.js, Bun, Claude Code, and Codex versions | Keep exact versions. A maintainer should update and test them deliberately. |
+| Field                         | What to enter                                                                 | When to change it                                                                                                                             |
+| ----------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deploymentName`              | A lowercase name using letters, numbers, and hyphens                          | Keep it stable for the life of one deployment. Changing it creates a separate set of AWS resources.                                           |
+| `region`                      | The AWS Region for the deployment                                             | Choose a Region supported by the required AWS services and configured Bedrock models.                                                         |
+| `publicUrl`                   | Empty, or the exact `https://` origin of an active App Runner custom domain   | Leave empty for the generated App Runner address. Do not add a path or trailing slash.                                                        |
+| `networkMode`                 | `private-nat` or `private-endpoints`                                          | `private-nat` is the normal starting point. The endpoint mode adds AWS service endpoints but still keeps internet access for developer tools. |
+| `identityCenter.metadataUrl`  | The private HTTPS metadata address from the customer-managed SAML application | Preferred after the first identity bootstrap. Set only this field or `metadataFile`.                                                          |
+| `identityCenter.metadataFile` | A local path to downloaded SAML metadata XML                                  | Use only when IAM Identity Center does not provide a metadata address. A path under `.agentformation/` stays out of Git.                      |
+| `cloudFormationRoleArn`       | An optional, existing CloudFormation service role ARN                         | Add it only when the AWS account requires CloudFormation to use that role.                                                                    |
+| `runtime.architecture`        | `arm64` (`aarch64`) or `x86_64` (`amd64`)                                     | It must match the selected instance family, not the operator computer. ARM is the example default.                                            |
+| `runtime.instanceType`        | The EC2 type for each employee environment                                    | Review cost and memory before inviting a group.                                                                                               |
+| `runtime.volumeSizeGiB`       | Persistent disk size, from 20 through 1024 GiB                                | Increasing the default affects newly created environments.                                                                                    |
+| `models.claude`               | An active Bedrock inference-profile ID                                        | The deploy check resolves the profile and limits the runtime role to that profile and its current destination models.                         |
+| `models.codex`                | The Bedrock model ID used by Codex                                            | Confirm access, provider terms, and quotas in the deployment Region.                                                                          |
+| `versions.*`                  | Exact AWS CLI, Node.js, Bun, Claude Code, and Codex versions                  | Keep exact versions. A maintainer should update and test them deliberately.                                                                   |
 
 Run this after every config edit:
 
@@ -35,6 +35,22 @@ AWS_PROFILE=your-profile ./agentformation doctor
 
 The command checks the file shape, local tools, AWS identity, templates, and
 model availability without printing private metadata or credentials.
+
+## Architecture names and build targets
+
+`runtime.architecture` controls the employee EC2 runtime only. It is independent
+of the computer running `./agentformation deploy`:
+
+- `arm64` is also called `aarch64` and matches AWS Graviton instance families
+  such as `m7g`;
+- `x86_64` is also called `amd64` and matches 64-bit Intel/AMD instance
+  families; and
+- Linux and macOS are operating systems, not CPU architectures.
+
+The current App Runner web image target is `linux/amd64`. Docker Buildx lets a
+macOS or Linux ARM host build that target without changing the employee runtime
+architecture. See the [workstation setup guide](workstation-setup.md) for
+detection commands, installer selection, and architecture-error troubleshooting.
 
 ## Move an existing deployment config to another computer
 
@@ -128,6 +144,7 @@ separately so workspace data and personal settings are backed up and verified.
 - A custom `publicUrl` must already be active in App Runner and must contain only
   the HTTPS origin.
 - The Claude value must be an inference-profile ID, not an arbitrary model name.
-- The instance family must match `runtime.architecture`.
+- The instance family must match `runtime.architecture`; do not copy the
+  operator computer's architecture into this field by habit.
 - Never commit the local config, metadata XML, `.env` files, or
   `.agentformation/` state.

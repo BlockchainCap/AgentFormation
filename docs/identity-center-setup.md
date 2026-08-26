@@ -9,6 +9,11 @@ This setup requires an **organization instance** of IAM Identity Center and an
 administrator who can add customer-managed applications and assign groups. An AWS
 account instance of Identity Center is not enough for customer-managed SAML apps.
 
+The application assignment described here controls who can open AgentFormation.
+It is separate from the AWS account and permission-set assignment an operator
+uses with the AWS CLI. Prepare that temporary CLI access first with the
+[workstation setup guide](workstation-setup.md).
+
 AWS currently allows customer-managed SAML application creation and SAML
 attribute mapping only in the IAM Identity Center console. Its
 [public application API](https://docs.aws.amazon.com/singlesignon/latest/APIReference/API_CreateApplication.html)
