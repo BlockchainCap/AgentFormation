@@ -1,6 +1,20 @@
+<div align="center">
+
 # AgentFormation
 
-An AWS-native template for private, persistent remote coding environments.
+**Private, persistent coding-agent workspaces in your AWS account.**
+
+<p>
+  <a href="https://github.com/BlockchainCap/AgentFormation/actions/workflows/checks.yml"><img alt="Checks" src="https://img.shields.io/github/actions/workflow/status/BlockchainCap/AgentFormation/checks.yml?branch=main&amp;style=flat-square&amp;label=checks"></a>
+  <a href="LICENSE"><img alt="License: BSD 2-Clause" src="https://img.shields.io/badge/license-BSD%202--Clause-3f3f46?style=flat-square"></a>
+  <a href="SECURITY.md"><img alt="Security policy" src="https://img.shields.io/badge/security-policy-2f855a?style=flat-square"></a>
+</p>
+
+<p>Each approved employee gets one private EC2 runtime and a persistent <code>/workspace</code>—with company SSO and no inbound SSH.</p>
+
+<p><a href="#quick-start">Quick start</a> · <a href="#architecture">Architecture</a> · <a href="#documentation">Documentation</a> · <a href="#security-model">Security</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
+
+</div>
 
 <p align="center">
   <img src="assets/agentformation-demo.svg" alt="Animated AgentFormation browser terminal showing Codex editing a project and running its checks" width="1100">
@@ -18,12 +32,16 @@ password, or authenticator-app setting. An administrator normally assigns a
 dedicated AgentFormation access group to the app, and each assigned employee can
 create exactly one reviewed coding environment for themself.
 
+| Company sign-in | Private by default | Persistent by design |
+| --- | --- | --- |
+| IAM Identity Center; no second app password | Private subnet, encrypted EBS, no public IP, and no inbound SSH | `/workspace` and `tmux` keep running after the browser disconnects |
+
 > [!IMPORTANT]
 > The first complete deployment builds a runtime image and an App Runner service.
 > It commonly takes more than 30 minutes. This is normal for the AWS services used
 > by the template, not a frozen terminal.
 
-## What it creates
+## Architecture
 
 ```text
 assigned employee group
@@ -168,6 +186,17 @@ command uses that address for Auth.js, Cognito callbacks and logout, browser
 upload restrictions, and status output. Do not commit a company hostname to the
 public repository. Leave `publicUrl` empty to keep using the generated App Runner
 address.
+
+## Documentation
+
+| Guide | Use it for |
+| --- | --- |
+| [Workstation setup](docs/workstation-setup.md) | Installing the AWS CLI and Docker on macOS or Linux, including `amd64` and `arm64` differences |
+| [IAM Identity Center setup](docs/identity-center-setup.md) | Creating the SAML application, attribute mappings, and assigned access group |
+| [Configuration and upgrades](docs/configuration.md) | Choosing settings, moving a deployment, rebuilding images, and applying updates |
+| [Remote CLI sign-in](docs/remote-cli-login.md) | Finishing `localhost` or `127.0.0.1` OAuth callbacks from a browser terminal |
+| [Agent config migration](docs/migrating-local-agent-configs.md) | Moving approved Codex or Claude Code preferences and history into a runtime |
+| [Security model](docs/security-model.md) and [privacy notes](docs/privacy.md) | Understanding trust boundaries, access, stored data, and operational responsibilities |
 
 ## Daily administration
 
