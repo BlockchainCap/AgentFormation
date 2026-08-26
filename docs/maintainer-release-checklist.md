@@ -7,15 +7,22 @@ account and complete this checklist.
 
 - Run `./scripts/check.sh` from a clean checkout and confirm the dependency audit
   reports no known vulnerabilities.
-- Run the repository secret and static-security scans described in the release
-  handoff.
-- Confirm the configured AWS CLI, Claude Code, and Codex versions still exist at
-  their official distribution sources. Refresh installer hashes only after
-  reviewing the downloaded scripts.
+- Scan the complete Git history for accidentally committed secrets. The same
+  pinned Gitleaks image runs in pull requests:
+
+  ```bash
+  docker run --rm --volume "$PWD:/repo" \
+    zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+    git /repo --redact --no-banner
+  ```
+
+- Confirm the configured AWS CLI, Node.js, Bun, Claude Code, and Codex versions
+  still exist at their official distribution sources. Refresh installer hashes
+  only after reviewing the downloaded files.
 - Leave both `identityCenter.metadataUrl` and `identityCenter.metadataFile` empty
   and run `./agentformation deploy`. Confirm it creates only the identity
-  bootstrap, prints the SAML ACS URL and audience, and stops before publishing a
-  web service.
+  bootstrap, prints the SAML ACS URL and audience, and exits successfully before
+  publishing a web service.
 - Create a customer-managed IAM Identity Center SAML application in the test
   organization, map `Subject` to `${user:subject}` with the `persistent` format,
   map `email` to `${user:email}` with the `unspecified` format, and assign one

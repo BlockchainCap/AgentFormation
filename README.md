@@ -46,6 +46,7 @@ AWS IAM Identity Center --SAML--> Cognito bridge --OIDC--> App Runner
 - one private, encrypted EC2 runtime and EBS volume per employee
 - AWS Systems Manager Session Manager instead of inbound SSH
 - an EC2 Image Builder pipeline with pinned Claude Code and Codex versions
+- pinned AWS CLI, Node.js, and Bun versions for repeatable project setup
 - an App Runner web terminal
 - a restricted Step Functions job that can create only the reviewed runtime stack
 - a DynamoDB identity-to-runtime registry
@@ -78,7 +79,10 @@ because not every account requires one.
    ```
 
    The first deploy creates only enough identity infrastructure to print the
-   exact SAML ACS URL and audience, then stops safely.
+   exact SAML ACS URL and audience, then exits successfully.
+
+   Use the [configuration guide](docs/configuration.md) for every field, moving
+   an older config, or continuing the same deployment from another computer.
 
 2. In IAM Identity Center, create a customer-managed SAML 2.0 application using
    those two printed values. Map SAML `Subject` to `${user:subject}` with the
@@ -181,6 +185,11 @@ create a new environment.
 
 Users start in `/workspace`. Closing a browser does not kill the `tmux` session,
 so reconnecting returns to the same terminal process.
+
+New environments include Git, Docker, Node.js/npm, Bun, `jq`, `ripgrep`, and
+`tmux` alongside Claude Code and Codex. A rebuilt image applies to environments
+created afterward; it does not silently replace an existing employee's
+persistent machine. See the [configuration and upgrade guide](docs/configuration.md).
 
 ## Security model
 

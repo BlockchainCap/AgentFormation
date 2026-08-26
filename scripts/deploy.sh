@@ -91,7 +91,8 @@ deploy_stack "$(foundation_stack)" templates/foundation.yaml \
 if [[ -z "$IDENTITY_CENTER_METADATA_URL" && -z "$IDENTITY_CENTER_METADATA_FILE" ]]; then
   say "The identity bootstrap is ready"
   print_identity_center_setup
-  fail "Create and assign the IAM Identity Center SAML application, set identityCenter.metadataUrl (preferred) or identityCenter.metadataFile, and run deploy again"
+  say "Next: create and assign the IAM Identity Center SAML application, set identityCenter.metadataUrl (preferred) or identityCenter.metadataFile, and run deploy again"
+  exit 0
 fi
 
 USER_POOL_ID="$(stack_output "$(foundation_stack)" UserPoolId)"
@@ -181,10 +182,12 @@ aws_cli cognito-idp describe-user-pool-client \
 
 ARCHITECTURE="$(config '.runtime.architecture')"
 AWS_CLI_VERSION="$(config '.versions.awsCli')"
+NODE_VERSION="$(config '.versions.node')"
+BUN_VERSION="$(config '.versions.bun')"
 CLAUDE_CODE_VERSION="$(config '.versions.claudeCode')"
 CODEX_VERSION="$(config '.versions.codex')"
 IMAGE_TEMPLATE_HASH="$(hash_text "$(<"$ROOT_DIR/templates/image.yaml")")"
-IMAGE_COMPONENT_HASH="$(hash_text "$ARCHITECTURE:$AWS_CLI_VERSION:$CLAUDE_CODE_VERSION:$CODEX_VERSION:$IMAGE_TEMPLATE_HASH")"
+IMAGE_COMPONENT_HASH="$(hash_text "$ARCHITECTURE:$AWS_CLI_VERSION:$NODE_VERSION:$BUN_VERSION:$CLAUDE_CODE_VERSION:$CODEX_VERSION:$IMAGE_TEMPLATE_HASH")"
 IMAGE_COMPONENT_VERSION="1.0.$((16#${IMAGE_COMPONENT_HASH:0:7}))"
 if [[ "$ARCHITECTURE" == "arm64" ]]; then
   BUILD_INSTANCE="c7g.large"
@@ -198,6 +201,8 @@ deploy_stack "$(image_stack)" templates/image.yaml \
   Architecture="$ARCHITECTURE" \
   BuildInstanceType="$BUILD_INSTANCE" \
   AwsCliVersion="$AWS_CLI_VERSION" \
+  NodeVersion="$NODE_VERSION" \
+  BunVersion="$BUN_VERSION" \
   ClaudeCodeVersion="$CLAUDE_CODE_VERSION" \
   CodexVersion="$CODEX_VERSION" \
   AmiParameterPath="$(ami_parameter_path)" \

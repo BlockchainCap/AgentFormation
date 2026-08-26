@@ -33,8 +33,8 @@ SAML ACS URL: https://...
 SAML audience: urn:amazon:cognito:sp:...
 ```
 
-The command then stops. This is expected; the web app is not published with a
-local password fallback.
+The command then exits successfully. This is expected; the web app is not
+published with a local password fallback.
 
 ## 2. Add the SAML application
 

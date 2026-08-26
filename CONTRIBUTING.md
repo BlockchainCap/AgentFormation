@@ -23,7 +23,10 @@ Thanks for helping improve AgentFormation.
 
 ## Checks
 
-Use Bun 1.3.6 for the web app. From the repository root, the complete check is:
+Use the Node.js and Bun versions pinned in `agentformation.example.json` for the
+web app. New AgentFormation runtime images include those versions, so a checkout
+under `/workspace` can run the same checks. From the repository root, the
+complete check is:
 
 ```bash
 ./scripts/check.sh

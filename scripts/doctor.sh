@@ -21,8 +21,14 @@ config '.runtime.volumeSizeGiB | type == "number" and . >= 20 and . <= 1024' >/d
 config '.models.claude | test("^[A-Za-z0-9._:/-]+$")' >/dev/null
 config '.models.codex | test("^[A-Za-z0-9._:/-]+$")' >/dev/null
 config '.versions.awsCli | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")' >/dev/null
+config '.versions.node | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")' >/dev/null
+config '.versions.bun | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")' >/dev/null
 config '.versions.claudeCode | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")' >/dev/null
 config '.versions.codex | test("^[0-9]+\\.[0-9]+\\.[0-9]+([-.][A-Za-z0-9.]+)?$")' >/dev/null
+
+if config 'has("users")' >/dev/null; then
+  say "The users list is no longer used; IAM Identity Center assignments now control access"
+fi
 
 IDENTITY_CENTER_METADATA_URL="$(config '.identityCenter.metadataUrl // ""')"
 IDENTITY_CENTER_METADATA_FILE="$(config '.identityCenter.metadataFile // ""')"
