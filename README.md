@@ -2,6 +2,10 @@
 
 An AWS-native template for private, persistent remote coding environments.
 
+<p align="center">
+  <img src="assets/agentformation-demo.svg" alt="Animated AgentFormation browser terminal showing Codex editing a project and running its checks" width="1100">
+</p>
+
 AgentFormation gives each approved employee a private EC2 workspace with both
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
 [Codex](https://developers.openai.com/codex/) configured for Amazon Bedrock. A
