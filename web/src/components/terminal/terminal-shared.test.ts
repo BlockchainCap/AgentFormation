@@ -6,6 +6,7 @@ import {
   getNextTerminalTabIndex,
   getTerminalSelectionRange,
   normalizeTerminalTabs,
+  TERMINAL_SCROLL_OPTIONS,
 } from "./terminal-shared";
 
 describe("terminal tabs", () => {
@@ -44,6 +45,13 @@ describe("terminal tabs", () => {
 });
 
 describe("terminal scrolling", () => {
+  it("uses a calmer wheel and trackpad speed than xterm's defaults", () => {
+    expect(TERMINAL_SCROLL_OPTIONS).toEqual({
+      scrollSensitivity: 0.5,
+      fastScrollSensitivity: 2,
+    });
+  });
+
   it("keeps vertical wheel input with xterm and horizontal input with the pan view", () => {
     expect(getDominantScrollAxis(0, 24)).toBe("vertical");
     expect(getDominantScrollAxis(24, 0)).toBe("horizontal");
