@@ -1,0 +1,445 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Restricted self-service provisioning for one AgentFormation runtime per federated user.
+
+Parameters:
+  DeploymentName:
+    Type: String
+    AllowedPattern: "^[a-z][a-z0-9-]{2,31}$"
+  UserPoolId:
+    Type: String
+    MinLength: 1
+  UserRegistryTableName:
+    Type: String
+    MinLength: 1
+  RuntimeTemplateUrl:
+    Type: String
+    AllowedPattern: "^https://[^ ]+$"
+  RuntimeTemplateBucket:
+    Type: String
+    MinLength: 3
+  RuntimeTemplateKey:
+    Type: String
+    AllowedPattern: '^provisioning/runtime-[0-9a-f]{64}\.yaml$'
+  RuntimeSubnetId:
+    Type: AWS::EC2::Subnet::Id
+  RuntimeSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  RuntimeAmiId:
+    Type: AWS::EC2::Image::Id
+  InstanceType:
+    Type: String
+    AllowedValues:
+      [
+        t4g.medium,
+        t4g.large,
+        c7g.large,
+        c7g.xlarge,
+        m7g.large,
+        m7g.xlarge,
+        t3.medium,
+        t3.large,
+        c7i.large,
+        c7i.xlarge,
+        m7i.large,
+        m7i.xlarge,
+      ]
+  Architecture:
+    Type: String
+    AllowedValues: [arm64, x86_64]
+  VolumeSizeGiB:
+    Type: String
+    AllowedPattern: "^(2[0-9]|[3-9][0-9]|[1-9][0-9]{2}|10[0-1][0-9]|102[0-4])$"
+  ClaudeModelId:
+    Type: String
+    MinLength: 1
+    MaxLength: 256
+    AllowedPattern: "^[A-Za-z0-9._:/-]+$"
+  ClaudeInferenceProfileArn:
+    Type: String
+    MinLength: 20
+  ClaudeFoundationModelArns:
+    Type: CommaDelimitedList
+  CodexModelId:
+    Type: String
+    MinLength: 1
+    MaxLength: 256
+    AllowedPattern: "^[A-Za-z0-9._:/-]+$"
+  UploadBucketName:
+    Type: String
+    MinLength: 3
+
+Resources:
+  RuntimeCloudFormationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${DeploymentName}-runtime-cfn"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudformation.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ManageRuntimeIam
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ManageNamedRuntimeRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${DeploymentName}-runtime-*"
+              - Sid: ManageNamedRuntimeInstanceProfiles
+                Effect: Allow
+                Action:
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:GetInstanceProfile
+                  - iam:AddRoleToInstanceProfile
+                  - iam:RemoveRoleFromInstanceProfile
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/${DeploymentName}-runtime-*"
+              - Sid: PassOnlyRuntimeRolesToEc2
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${DeploymentName}-runtime-*"
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ec2.amazonaws.com
+        - PolicyName: ManageRuntimeInstances
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: UseReviewedRuntimeDependencies
+                Effect: Allow
+                Action: ec2:RunInstances
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}::image/${RuntimeAmiId}"
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${RuntimeSubnetId}"
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:security-group/${RuntimeSecurityGroupId}"
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*"
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/*"
+              - Sid: LaunchTaggedRuntimeInstance
+                Effect: Allow
+                Action: ec2:RunInstances
+                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+                Condition:
+                  StringEquals:
+                    "aws:RequestTag/AgentFormationDeployment": !Ref DeploymentName
+              - Sid: TagRuntimeDuringLaunch
+                Effect: Allow
+                Action: ec2:CreateTags
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    ec2:CreateAction: RunInstances
+              - Sid: RemoveDeploymentRuntime
+                Effect: Allow
+                Action: ec2:TerminateInstances
+                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+                Condition:
+                  StringEquals:
+                    "ec2:ResourceTag/AgentFormationDeployment": !Ref DeploymentName
+              - Sid: ReadRuntimeState
+                Effect: Allow
+                Action:
+                  - ec2:DescribeImages
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceAttribute
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeTags
+                  - ec2:DescribeVolumes
+                Resource: "*"
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
+  ProvisioningStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: states.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ReadReviewedRuntimeTemplate
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${RuntimeTemplateBucket}/${RuntimeTemplateKey}"
+        - PolicyName: ValidateFederatedUser
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: cognito-idp:ListUsers
+                Resource: !Sub "arn:${AWS::Partition}:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${UserPoolId}"
+        - PolicyName: UpdateProvisioningRegistry
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:PutItem, dynamodb:UpdateItem]
+                Resource: !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${UserRegistryTableName}"
+        - PolicyName: CreateRestrictedRuntimeStack
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: cloudformation:CreateStack
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${DeploymentName}-runtime-*/*"
+                Condition:
+                  StringEquals:
+                    cloudformation:RoleArn: !GetAtt RuntimeCloudFormationRole.Arn
+                    cloudformation:TemplateUrl: !Ref RuntimeTemplateUrl
+              - Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${DeploymentName}-runtime-*/*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt RuntimeCloudFormationRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+              - Effect: Allow
+                Action: ec2:DescribeInstances
+                Resource: "*"
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
+  RuntimeProvisioningStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${DeploymentName}-runtime-provisioning"
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt ProvisioningStateMachineRole.Arn
+      Definition:
+        Comment: Validate one federated user and create only that user's reviewed AgentFormation runtime stack.
+        StartAt: PrepareSubjectParts
+        States:
+          PrepareSubjectParts:
+            Type: Pass
+            Parameters:
+              "subject.$": $.subject
+              "email.$": $.email
+              "subjectParts.$": States.StringSplit($.subject, '-')
+            Next: PrepareRuntimeInput
+          PrepareRuntimeInput:
+            Type: Pass
+            Parameters:
+              "subject.$": $.subject
+              "email.$": $.email
+              "stackName.$": !Sub "States.Format('${DeploymentName}-runtime-{}{}{}', States.ArrayGetItem($.subjectParts, 0), States.ArrayGetItem($.subjectParts, 1), States.ArrayGetItem($.subjectParts, 2))"
+            Next: FindFederatedUser
+          FindFederatedUser:
+            Type: Task
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:cognitoidentityprovider:listUsers"
+            Parameters:
+              UserPoolId: !Ref UserPoolId
+              "Filter.$": 'States.Format(''sub = "{}"'', $.subject)'
+              Limit: 2
+            ResultPath: $.identity
+            Next: RequireOneFederatedUser
+          RequireOneFederatedUser:
+            Type: Choice
+            Choices:
+              - And:
+                  - Variable: $.identity.Users[0].Username
+                    IsPresent: true
+                  - Variable: $.identity.Users[0].Enabled
+                    BooleanEquals: true
+                  - Not:
+                      Variable: $.identity.Users[1].Username
+                      IsPresent: true
+                Next: RegisterProvisioning
+            Default: InvalidIdentity
+          RegisterProvisioning:
+            Type: Task
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:dynamodb:putItem"
+            Parameters:
+              TableName: !Ref UserRegistryTableName
+              Item:
+                userSub: { "S.$": $.subject }
+                email: { "S.$": $.email }
+                runtimeStackName: { "S.$": $.stackName }
+                status: { S: provisioning }
+                provisioningStartedAt: { "S.$": $$.State.EnteredTime }
+                updatedAt: { "S.$": $$.State.EnteredTime }
+              ConditionExpression: "attribute_not_exists(userSub) OR #status = :failed"
+              ExpressionAttributeNames:
+                "#status": status
+              ExpressionAttributeValues:
+                ":failed": { S: failed }
+            ResultPath: $.registryWrite
+            Catch:
+              - ErrorEquals:
+                  - DynamoDb.ConditionalCheckFailedException
+                  - DynamoDB.ConditionalCheckFailedException
+                ResultPath: $.duplicate
+                Next: AlreadyProvisioned
+            Next: CreateRuntimeStack
+          CreateRuntimeStack:
+            Type: Task
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:cloudformation:createStack"
+            Parameters:
+              "StackName.$": $.stackName
+              TemplateURL: !Ref RuntimeTemplateUrl
+              RoleARN: !GetAtt RuntimeCloudFormationRole.Arn
+              Capabilities: [CAPABILITY_NAMED_IAM]
+              OnFailure: DELETE
+              TimeoutInMinutes: 30
+              Parameters:
+                - ParameterKey: DeploymentName
+                  ParameterValue: !Ref DeploymentName
+                - ParameterKey: RuntimeSubnetId
+                  ParameterValue: !Ref RuntimeSubnetId
+                - ParameterKey: RuntimeSecurityGroupId
+                  ParameterValue: !Ref RuntimeSecurityGroupId
+                - ParameterKey: UserSubject
+                  "ParameterValue.$": $.subject
+                - ParameterKey: AmiId
+                  ParameterValue: !Ref RuntimeAmiId
+                - ParameterKey: InstanceType
+                  ParameterValue: !Ref InstanceType
+                - ParameterKey: Architecture
+                  ParameterValue: !Ref Architecture
+                - ParameterKey: VolumeSizeGiB
+                  ParameterValue: !Ref VolumeSizeGiB
+                - ParameterKey: ClaudeModelId
+                  ParameterValue: !Ref ClaudeModelId
+                - ParameterKey: ClaudeInferenceProfileArn
+                  ParameterValue: !Ref ClaudeInferenceProfileArn
+                - ParameterKey: ClaudeFoundationModelArns
+                  ParameterValue: !Join [",", !Ref ClaudeFoundationModelArns]
+                - ParameterKey: CodexModelId
+                  ParameterValue: !Ref CodexModelId
+                - ParameterKey: UploadBucketName
+                  ParameterValue: !Ref UploadBucketName
+              Tags:
+                - Key: AgentFormationDeployment
+                  Value: !Ref DeploymentName
+                - Key: AgentFormationUserSubject
+                  "Value.$": $.subject
+            ResultPath: $.createStack
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.provisioningError
+                Next: MarkProvisioningFailed
+            Next: WaitForRuntimeStack
+          WaitForRuntimeStack:
+            Type: Wait
+            Seconds: 15
+            Next: ReadRuntimeStack
+          ReadRuntimeStack:
+            Type: Task
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:cloudformation:describeStacks"
+            Parameters:
+              "StackName.$": $.stackName
+            ResultPath: $.stack
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.provisioningError
+                Next: MarkProvisioningFailed
+            Next: CheckRuntimeStack
+          CheckRuntimeStack:
+            Type: Choice
+            Choices:
+              - Variable: $.stack.Stacks[0].StackStatus
+                StringEquals: CREATE_COMPLETE
+                Next: FindRuntimeInstance
+              - Variable: $.stack.Stacks[0].StackStatus
+                StringEquals: CREATE_IN_PROGRESS
+                Next: WaitForRuntimeStack
+            Default: MarkProvisioningFailed
+          FindRuntimeInstance:
+            Type: Task
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:ec2:describeInstances"
+            Parameters:
+              Filters:
+                - Name: tag:aws:cloudformation:stack-name
+                  "Values.$": States.Array($.stackName)
+                - Name: instance-state-name
+                  Values: [pending, running, stopping, stopped]
+            ResultPath: $.runtime
+            Next: RequireRuntimeInstance
+          RequireRuntimeInstance:
+            Type: Choice
+            Choices:
+              - Variable: $.runtime.Reservations[0].Instances[0].InstanceId
+                IsPresent: true
+                Next: ActivateRuntime
+            Default: WaitForRuntimeRecord
+          WaitForRuntimeRecord:
+            Type: Wait
+            Seconds: 10
+            Next: FindRuntimeInstance
+          ActivateRuntime:
+            Type: Task
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:dynamodb:updateItem"
+            Parameters:
+              TableName: !Ref UserRegistryTableName
+              Key:
+                userSub: { "S.$": $.subject }
+              UpdateExpression: "SET #status = :active, instanceId = :instanceId, updatedAt = :updatedAt"
+              ConditionExpression: "#status = :provisioning AND runtimeStackName = :stackName"
+              ExpressionAttributeNames:
+                "#status": status
+              ExpressionAttributeValues:
+                ":active": { S: active }
+                ":provisioning": { S: provisioning }
+                ":instanceId":
+                  { "S.$": "$.runtime.Reservations[0].Instances[0].InstanceId" }
+                ":stackName": { "S.$": $.stackName }
+                ":updatedAt": { "S.$": $$.State.EnteredTime }
+            ResultPath: $.registryWrite
+            Next: RuntimeReady
+          MarkProvisioningFailed:
+            Type: Task
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:dynamodb:updateItem"
+            Parameters:
+              TableName: !Ref UserRegistryTableName
+              Key:
+                userSub: { "S.$": $.subject }
+              UpdateExpression: "SET #status = :failed, updatedAt = :updatedAt"
+              ConditionExpression: "#status = :provisioning"
+              ExpressionAttributeNames:
+                "#status": status
+              ExpressionAttributeValues:
+                ":failed": { S: failed }
+                ":provisioning": { S: provisioning }
+                ":updatedAt": { "S.$": $$.State.EnteredTime }
+            ResultPath: $.registryWrite
+            Next: ProvisioningFailed
+          AlreadyProvisioned:
+            Type: Succeed
+          RuntimeReady:
+            Type: Succeed
+          InvalidIdentity:
+            Type: Fail
+            Error: InvalidFederatedIdentity
+            Cause: The requested subject is not a unique federated user in this deployment.
+          ProvisioningFailed:
+            Type: Fail
+            Error: RuntimeProvisioningFailed
+            Cause: The reviewed runtime stack did not reach CREATE_COMPLETE.
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
+Outputs:
+  StateMachineArn:
+    Value: !Ref RuntimeProvisioningStateMachine

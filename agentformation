@@ -13,11 +13,11 @@ case "$COMMAND" in
     SUBCOMMAND="${1:-help}"
     if [[ $# -gt 0 ]]; then shift; fi
     case "$SUBCOMMAND" in
-      add|disable|purge)
+      disable|enable|purge)
         exec "$ROOT_DIR/scripts/users-$SUBCOMMAND.sh" "$@"
         ;;
       *)
-        echo "Usage: ./agentformation users {add|disable|purge}" >&2
+        echo "Usage: ./agentformation users {disable|enable|purge}" >&2
         exit 2
         ;;
     esac
@@ -30,8 +30,8 @@ Usage:
   ./agentformation doctor
   ./agentformation deploy
   ./agentformation status
-  ./agentformation users add [--email ADDRESS] [--suppress-invite]
   ./agentformation users disable [--email ADDRESS]
+  ./agentformation users enable [--email ADDRESS]
   ./agentformation users purge [--email ADDRESS] --confirm DELETE
   ./agentformation destroy --confirm DELETE
 

@@ -1,25 +1,38 @@
 import { z } from "zod";
 
-export const runtimeRecordSchema = z.object({
+const runtimeRecordBaseSchema = z.object({
   userSub: z.string().min(1),
   email: z.string().email(),
-  instanceId: z.string().regex(/^i-[0-9a-f]+$/),
   runtimeStackName: z.string().min(1).max(128),
-  status: z.enum(["active", "disabled"]),
+  provisioningStartedAt: z.string().datetime().optional(),
   updatedAt: z.string().datetime(),
 });
 
+export const runtimeRecordSchema = z.discriminatedUnion("status", [
+  runtimeRecordBaseSchema.extend({ status: z.literal("provisioning") }),
+  runtimeRecordBaseSchema.extend({ status: z.literal("failed") }),
+  runtimeRecordBaseSchema.extend({
+    status: z.literal("active"),
+    instanceId: z.string().regex(/^i-[0-9a-f]+$/),
+  }),
+  runtimeRecordBaseSchema.extend({
+    status: z.literal("disabled"),
+    instanceId: z.string().regex(/^i-[0-9a-f]+$/),
+  }),
+]);
+
 export type RuntimeRecord = z.infer<typeof runtimeRecordSchema>;
+export type ActiveRuntimeRecord = Extract<RuntimeRecord, { status: "active" }>;
 
 export function isActiveRuntime(
   record: RuntimeRecord | undefined,
-): record is RuntimeRecord & { status: "active" } {
+): record is ActiveRuntimeRecord {
   return record?.status === "active";
 }
 
 export function canSubjectAccessRuntime(
   subject: string,
   record: RuntimeRecord | undefined,
-): record is RuntimeRecord & { status: "active" } {
+): record is ActiveRuntimeRecord {
   return record?.userSub === subject && isActiveRuntime(record);
 }

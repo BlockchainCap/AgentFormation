@@ -18,6 +18,7 @@ forks are not maintained.
 
 ## Operator responsibility
 
-The operator owns the AWS account, identity invitations, Bedrock access, costs,
-backups, updates, and deletion. Review changes before deploying them and use a
-separate non-production AWS account for evaluation.
+The operator owns the AWS account, IAM Identity Center application and group
+assignments, Bedrock access, costs, backups, updates, and deletion. Review changes
+before deploying them and use a separate non-production AWS account for
+evaluation.

@@ -12,13 +12,13 @@ require_config
 
 delete_stack "$(web_stack)"
 
-if aws_cli cloudformation describe-stacks --stack-name "$(foundation_stack)" >/dev/null 2>&1; then
-  TABLE_NAME="$(stack_output "$(foundation_stack)" UserRegistryTableName)"
-  while IFS= read -r RUNTIME_STACK; do
-    [[ "$RUNTIME_STACK" == "$(deployment_name)-runtime-"* ]] || continue
-    delete_stack "$RUNTIME_STACK"
-  done < <(aws_cli dynamodb scan --table-name "$TABLE_NAME" --projection-expression runtimeStackName --query 'Items[].runtimeStackName.S' --output text | tr '\t' '\n')
-fi
+RUNTIME_STACKS="$(aws_cli cloudformation describe-stacks --query 'Stacks[].StackName' --output json)"
+while IFS= read -r RUNTIME_STACK; do
+  [[ "$RUNTIME_STACK" == "$(deployment_name)-runtime-"* ]] || continue
+  delete_stack "$RUNTIME_STACK"
+done < <(jq -r --arg prefix "$(deployment_name)-runtime-" '.[] | select(startswith($prefix))' <<<"$RUNTIME_STACKS")
+
+delete_stack "$(provisioning_stack)"
 
 if aws_cli cloudformation describe-stacks --stack-name "$(image_stack)" >/dev/null 2>&1; then
   PIPELINE_ARN="$(stack_output "$(image_stack)" ImagePipelineArn)"

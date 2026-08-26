@@ -16,6 +16,30 @@ Parameters:
     Type: String
     Default: c7g.large
     AllowedValues: [c7g.large, t4g.medium, c7i.large, t3.medium]
+  AwsCliVersion:
+    Type: String
+    Default: 2.36.29
+    AllowedPattern: '^\d+\.\d+\.\d+$'
+  AwsCliInstallerSha256:
+    Type: String
+    Default: 80f4b79b35bb5c427261e8e9f0fd6959ad3513a697f6e37d823959a72cb654dc
+    AllowedPattern: '^[0-9a-f]{64}$'
+  NodeVersion:
+    Type: String
+    Default: 24.19.0
+    AllowedPattern: '^\d+\.\d+\.\d+$'
+  NodeArm64Sha256:
+    Type: String
+    Default: 01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc
+    AllowedPattern: '^[0-9a-f]{64}$'
+  NodeX64Sha256:
+    Type: String
+    Default: 14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647
+    AllowedPattern: '^[0-9a-f]{64}$'
+  BunVersion:
+    Type: String
+    Default: 1.3.6
+    AllowedPattern: '^\d+\.\d+\.\d+$'
   ClaudeCodeVersion:
     Type: String
     Default: 2.1.235
@@ -24,6 +48,10 @@ Parameters:
     Type: String
     Default: 0.148.0
     AllowedPattern: '^\d+\.\d+\.\d+([-.][A-Za-z0-9.]+)?$'
+  CodexInstallerSha256:
+    Type: String
+    Default: ba92dd27e5c06f0d3bbc58bfa4b9cfb6599cd2742fbb1f92a2765e6c07dedb5a
+    AllowedPattern: '^[0-9a-f]{64}$'
   AmiParameterPath:
     Type: String
     AllowedPattern: '^/[A-Za-z0-9/_.-]+$'
@@ -99,7 +127,7 @@ Resources:
                     - set -euo pipefail
                     - export DEBIAN_FRONTEND=noninteractive
                     - apt-get update
-                    - apt-get install -y --no-install-recommends bubblewrap build-essential ca-certificates curl docker.io git gnupg jq nodejs npm ripgrep tmux unzip
+                    - apt-get install -y --no-install-recommends bubblewrap build-essential ca-certificates curl docker.io git gnupg jq ripgrep tmux unzip xz-utils
                     - apt-get clean
                     - rm -rf /var/lib/apt/lists/*
               - name: InstallAwsCli
@@ -107,10 +135,11 @@ Resources:
                 inputs:
                   commands:
                     - set -euo pipefail
-                    - curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
-                    - unzip -q /tmp/awscliv2.zip -d /tmp
-                    - /tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
-                    - rm -rf /tmp/aws /tmp/awscliv2.zip
+                    - curl -fsSL https://awscli.amazonaws.com/v2/install.sh -o /tmp/install-aws-cli.sh
+                    - echo "${AwsCliInstallerSha256}  /tmp/install-aws-cli.sh" | sha256sum -c -
+                    - chmod 0755 /tmp/install-aws-cli.sh
+                    - /tmp/install-aws-cli.sh --version ${AwsCliVersion} --system --quiet
+                    - rm -f /tmp/install-aws-cli.sh
               - name: CreateRuntimeUser
                 action: ExecuteBash
                 inputs:
@@ -121,6 +150,24 @@ Resources:
                     - install -d -m 0750 -o agentformation -g agentformation /workspace
                     - install -d -m 0700 -o agentformation -g agentformation /home/agentformation/.codex
                     - install -d -m 0755 -o agentformation -g agentformation /home/agentformation/.local/bin
+              - name: InstallNode
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -euo pipefail
+                    - if [[ "${Architecture}" == "arm64" ]]; then NODE_ARCH="arm64"; NODE_SHA256="${NodeArm64Sha256}"; else NODE_ARCH="x64"; NODE_SHA256="${NodeX64Sha256}"; fi
+                    - curl -fsSL "https://nodejs.org/dist/v${NodeVersion}/node-v${NodeVersion}-linux-${!NODE_ARCH}.tar.xz" -o /tmp/node.tar.xz
+                    - echo "${!NODE_SHA256}  /tmp/node.tar.xz" | sha256sum -c -
+                    - tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
+                    - rm -f /tmp/node.tar.xz
+                    - node --version | grep -Fx "v${NodeVersion}"
+                    - npm --version
+              - name: InstallBun
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - set -euo pipefail
+                    - npm install --global "bun@${BunVersion}"
               - name: InstallClaudeCode
                 action: ExecuteBash
                 inputs:
@@ -142,6 +189,7 @@ Resources:
                   commands:
                     - set -euo pipefail
                     - curl -fsSL https://chatgpt.com/codex/install.sh -o /tmp/install-codex.sh
+                    - echo "${CodexInstallerSha256}  /tmp/install-codex.sh" | sha256sum -c -
                     - chmod 0755 /tmp/install-codex.sh
                     - sudo -u agentformation env HOME=/home/agentformation CODEX_HOME=/home/agentformation/.codex CODEX_INSTALL_DIR=/home/agentformation/.local/bin CODEX_RELEASE=${CodexVersion} CODEX_NON_INTERACTIVE=1 /tmp/install-codex.sh
                     - rm -f /tmp/install-codex.sh
@@ -164,7 +212,9 @@ Resources:
                     - dpkg-query -W claude-code | grep -F "${ClaudeCodeVersion}-1"
                     - apt-mark showhold | grep -Fx claude-code
                     - sudo -u agentformation env HOME=/home/agentformation /home/agentformation/.local/bin/codex --version | grep -F "${CodexVersion}"
-                    - /usr/local/bin/aws --version
+                    - /usr/local/bin/aws --version | grep -F "aws-cli/${AwsCliVersion} "
+                    - node --version | grep -Fx "v${NodeVersion}"
+                    - bun --version | grep -Fx "${BunVersion}"
                     - bwrap --version
                     - git --version
                     - tmux -V
@@ -179,7 +229,9 @@ Resources:
                     - dpkg-query -W claude-code | grep -F "${ClaudeCodeVersion}-1"
                     - apt-mark showhold | grep -Fx claude-code
                     - sudo -u agentformation env HOME=/home/agentformation /home/agentformation/.local/bin/codex --version | grep -F "${CodexVersion}"
-                    - /usr/local/bin/aws --version
+                    - /usr/local/bin/aws --version | grep -F "aws-cli/${AwsCliVersion} "
+                    - node --version | grep -Fx "v${NodeVersion}"
+                    - bun --version | grep -Fx "${BunVersion}"
                     - bwrap --version
                     - systemctl is-enabled docker
                     - systemctl is-active snap.amazon-ssm-agent.amazon-ssm-agent.service

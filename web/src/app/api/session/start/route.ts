@@ -1,10 +1,11 @@
 import { StartSessionCommand } from "@aws-sdk/client-ssm";
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { z } from "zod";
-import { apiErrorResponse } from "@/lib/api-error";
+import { apiErrorResponse, apiJsonResponse } from "@/lib/api-error";
 import { requireAuthorizedRuntime } from "@/lib/authorization";
 import { getSsmClient } from "@/lib/aws";
 import { getSessionDocumentName } from "@/lib/env";
+import { requireSameOriginJson } from "@/lib/request-security";
 import { createTerminateToken } from "@/lib/session-proof";
 
 const requestSchema = z.object({
@@ -22,8 +23,9 @@ const requestSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
+    requireSameOriginJson(request);
     const { subject, runtime } = await requireAuthorizedRuntime();
-    const body = requestSchema.parse(await request.json().catch(() => ({})));
+    const body = requestSchema.parse(await request.json());
     const response = await getSsmClient().send(
       new StartSessionCommand({
         Target: runtime.instanceId,
@@ -37,7 +39,7 @@ export async function POST(request: NextRequest) {
       throw new Error("Incomplete SSM session response");
     }
 
-    return NextResponse.json({
+    return apiJsonResponse({
       sessionId: response.SessionId,
       streamUrl: response.StreamUrl,
       tokenValue: response.TokenValue,

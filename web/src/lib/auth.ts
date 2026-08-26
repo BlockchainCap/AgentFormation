@@ -1,27 +1,22 @@
 import { cache } from "react";
 import NextAuth from "next-auth";
-import Cognito from "next-auth/providers/cognito";
 import { z } from "zod";
+import { createCognitoProvider } from "./auth-provider";
 import { getAuthEnvironment } from "./env";
 import { getRuntimeForSubject } from "./registry";
-import { isActiveRuntime } from "./runtime-access";
 
 const cognitoProfileSchema = z.object({
-  sub: z.string().min(1),
-  email: z.string().email(),
-  email_verified: z.literal(true),
+  sub: z.string().uuid(),
+  email: z
+    .string()
+    .email()
+    .transform((email) => email.toLowerCase()),
 });
 
 const authEnvironment = getAuthEnvironment();
 
 const nextAuth = NextAuth({
-  providers: [
-    Cognito({
-      clientId: authEnvironment.clientId,
-      clientSecret: authEnvironment.clientSecret,
-      issuer: authEnvironment.issuer,
-    }),
-  ],
+  providers: [createCognitoProvider(authEnvironment)],
   session: { strategy: "jwt" },
   callbacks: {
     async signIn({ profile }) {
@@ -31,7 +26,7 @@ const nextAuth = NextAuth({
       }
 
       const runtime = await getRuntimeForSubject(parsed.data.sub);
-      return isActiveRuntime(runtime);
+      return runtime?.status !== "disabled";
     },
     async jwt({ token, profile }) {
       const parsed = cognitoProfileSchema.safeParse(profile);
@@ -44,6 +39,9 @@ const nextAuth = NextAuth({
     async session({ session, token }) {
       if (session.user && typeof token.subject === "string") {
         session.user.id = token.subject;
+        if (typeof token.email === "string") {
+          session.user.email = token.email;
+        }
       }
       return session;
     },

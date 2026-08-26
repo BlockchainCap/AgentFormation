@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { LogOut, ShieldCheck, TerminalSquare } from "lucide-react";
-import { TerminalWorkspace } from "@/components/terminal/terminal-workspace";
+import { EnvironmentSetup } from "@/components/environment-setup";
+import { MobileTerminal } from "@/components/mobile-terminal";
+import { OAuthCallbackAction } from "@/components/oauth-callback-action";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { cachedAuth, signIn, signOut } from "@/lib/auth";
@@ -20,7 +22,8 @@ function SignInPage() {
               AgentFormation
             </h1>
             <p className="text-sm text-muted-foreground">
-              Persistent remote coding agents, inside your AWS account.
+              Persistent remote coding agents, inside your company&apos;s AWS
+              account.
             </p>
           </div>
         </div>
@@ -31,12 +34,12 @@ function SignInPage() {
           }}
         >
           <Button type="submit" size="lg" className="w-full gap-2">
-            <ShieldCheck className="size-4" /> Sign in
+            <ShieldCheck className="size-4" /> Continue with company SSO
           </Button>
         </form>
         <p className="text-center text-xs text-muted-foreground">
-          Access is limited to users invited by this deployment&apos;s
-          administrator.
+          Access is limited to company groups assigned in AWS IAM Identity
+          Center. AgentFormation does not keep a separate password.
         </p>
       </div>
     </main>
@@ -45,21 +48,27 @@ function SignInPage() {
 
 export default async function Home() {
   const session = await cachedAuth();
-  if (!session?.user?.id) return <SignInPage />;
+  if (!session?.user?.id || !session.user.email) return <SignInPage />;
 
   const runtime = await getRuntimeForSubject(session.user.id);
-  if (!isActiveRuntime(runtime)) redirect("/auth-error?error=AccessDenied");
+  if (runtime?.status === "disabled")
+    redirect("/auth-error?error=AccessDenied");
 
   return (
     <div className="flex h-dvh flex-col">
-      <header className="flex shrink-0 items-center justify-between border-b bg-card px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">AgentFormation</p>
-          <p className="truncate text-xs text-muted-foreground">
-            {session.user.email} · /workspace
+      <header className="flex shrink-0 items-center justify-between border-b border-border bg-card px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+        <div className="min-w-0 space-y-0.5">
+          <p className="truncate text-xs font-semibold text-foreground">
+            {isActiveRuntime(runtime)
+              ? runtime.runtimeStackName
+              : "AgentFormation"}
+          </p>
+          <p className="truncate text-[10px] text-muted-foreground">
+            {session.user.email}
           </p>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-0.5">
+          {isActiveRuntime(runtime) ? <OAuthCallbackAction /> : null}
           <ThemeToggle />
           <form
             action={async () => {
@@ -73,15 +82,29 @@ export default async function Home() {
               size="icon-sm"
               aria-label="Sign out"
               title="Sign out"
+              className="text-muted-foreground"
             >
-              <LogOut className="size-4" />
+              <LogOut className="size-3.5" />
             </Button>
           </form>
         </div>
       </header>
-      <main className="min-h-0 flex-1">
-        <TerminalWorkspace storageScope={session.user.id} />
-      </main>
+      {isActiveRuntime(runtime) ? (
+        <main className="min-h-0 flex-1">
+          <MobileTerminal
+            storageScope={`${session.user.id}:${runtime.runtimeStackName}`}
+          />
+        </main>
+      ) : (
+        <EnvironmentSetup
+          initialStatus={runtime?.status ?? "not_created"}
+          initialStartedAt={
+            runtime?.status === "provisioning"
+              ? (runtime.provisioningStartedAt ?? runtime.updatedAt)
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 }

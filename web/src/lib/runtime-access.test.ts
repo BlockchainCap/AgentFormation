@@ -30,4 +30,20 @@ describe("runtime access", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("accepts provisioning records without exposing an instance", () => {
+    const result = runtimeRecordSchema.safeParse({
+      userSub: "user-a",
+      email: "person@example.com",
+      runtimeStackName: "agentformation-runtime-123",
+      status: "provisioning",
+      updatedAt: "2026-08-19T12:00:00Z",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect("instanceId" in result.data).toBe(false);
+      expect(canSubjectAccessRuntime("user-a", result.data)).toBe(false);
+    }
+  });
 });
