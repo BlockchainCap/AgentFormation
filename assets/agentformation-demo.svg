@@ -1,0 +1,442 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1200"
+  height="720"
+  viewBox="0 0 1200 720"
+  role="img"
+  aria-labelledby="title description"
+>
+  <title id="title">AgentFormation browser terminal running Codex</title>
+  <desc id="description">
+    An animated AgentFormation terminal where a developer asks Codex to add a
+    health check, Codex reads and edits files, runs tests, and reports success.
+  </desc>
+
+  <defs>
+    <linearGradient id="page" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#070708" />
+      <stop offset="0.52" stop-color="#111014" />
+      <stop offset="1" stop-color="#08080a" />
+    </linearGradient>
+    <linearGradient id="terminal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c1c1f" />
+      <stop offset="1" stop-color="#171719" />
+    </linearGradient>
+    <linearGradient id="input" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#18181b" />
+      <stop offset="1" stop-color="#141416" />
+    </linearGradient>
+    <linearGradient id="progress" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7c3aed" />
+      <stop offset="0.5" stop-color="#a78bfa" />
+      <stop offset="1" stop-color="#22d3ee" />
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#000000" flood-opacity="0.56" />
+    </filter>
+    <filter id="violet-glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="12" />
+    </filter>
+    <clipPath id="screen-clip">
+      <rect x="38" y="36" width="1124" height="648" rx="18" />
+    </clipPath>
+    <clipPath id="prompt-clip">
+      <rect class="prompt-reveal" x="90" y="229" width="0" height="34" />
+    </clipPath>
+  </defs>
+
+  <style>
+    text {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+        "Liberation Mono", "Courier New", monospace;
+    }
+
+    .conversation {
+      animation: conversation-cycle 18s ease-in-out -1.5s infinite;
+    }
+
+    .prompt-reveal {
+      animation: type-prompt 18s steps(32, end) -1.5s infinite;
+    }
+
+    .thinking {
+      animation: show-thinking 18s ease -1.5s infinite;
+    }
+
+    .read-step {
+      animation: show-read 18s ease -1.5s infinite;
+    }
+
+    .edit-step {
+      animation: show-edit 18s ease -1.5s infinite;
+    }
+
+    .test-step {
+      animation: show-test 18s ease -1.5s infinite;
+    }
+
+    .answer {
+      animation: show-answer 18s ease -1.5s infinite;
+    }
+
+    .progress-bar {
+      animation: progress-width 18s cubic-bezier(0.2, 0.8, 0.2, 1) -1.5s infinite;
+    }
+
+    .activity-dot {
+      animation: pulse 1.8s ease-in-out infinite;
+    }
+
+    .spinner-one {
+      animation: spinner-dot 1.2s ease-in-out 0s infinite;
+    }
+
+    .spinner-two {
+      animation: spinner-dot 1.2s ease-in-out 0.2s infinite;
+    }
+
+    .spinner-three {
+      animation: spinner-dot 1.2s ease-in-out 0.4s infinite;
+    }
+
+    .cursor {
+      animation: blink 1s steps(1, end) infinite;
+    }
+
+    .enter-glow {
+      animation: enter-glow 3s ease-in-out infinite;
+    }
+
+    @keyframes conversation-cycle {
+      0%,
+      5% {
+        opacity: 0;
+      }
+      9%,
+      91% {
+        opacity: 1;
+      }
+      100% {
+        opacity: 0;
+      }
+    }
+
+    @keyframes type-prompt {
+      0%,
+      5% {
+        width: 0;
+      }
+      18%,
+      91% {
+        width: 520px;
+      }
+      100% {
+        width: 0;
+      }
+    }
+
+    @keyframes show-thinking {
+      0%,
+      19% {
+        opacity: 0;
+        transform: translateY(6px);
+      }
+      23%,
+      38% {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      43%,
+      100% {
+        opacity: 0;
+        transform: translateY(-4px);
+      }
+    }
+
+    @keyframes show-read {
+      0%,
+      30% {
+        opacity: 0;
+        transform: translateY(7px);
+      }
+      34%,
+      91% {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      100% {
+        opacity: 0;
+      }
+    }
+
+    @keyframes show-edit {
+      0%,
+      41% {
+        opacity: 0;
+        transform: translateY(7px);
+      }
+      45%,
+      91% {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      100% {
+        opacity: 0;
+      }
+    }
+
+    @keyframes show-test {
+      0%,
+      52% {
+        opacity: 0;
+        transform: translateY(7px);
+      }
+      56%,
+      91% {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      100% {
+        opacity: 0;
+      }
+    }
+
+    @keyframes show-answer {
+      0%,
+      63% {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      68%,
+      91% {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      100% {
+        opacity: 0;
+      }
+    }
+
+    @keyframes progress-width {
+      0%,
+      20% {
+        width: 0;
+        opacity: 0;
+      }
+      24% {
+        opacity: 1;
+      }
+      57% {
+        width: 650px;
+        opacity: 1;
+      }
+      62%,
+      100% {
+        width: 650px;
+        opacity: 0;
+      }
+    }
+
+    @keyframes pulse {
+      0%,
+      100% {
+        opacity: 0.55;
+      }
+      50% {
+        opacity: 1;
+      }
+    }
+
+    @keyframes spinner-dot {
+      0%,
+      100% {
+        opacity: 0.25;
+        transform: translateY(0);
+      }
+      50% {
+        opacity: 1;
+        transform: translateY(-3px);
+      }
+    }
+
+    @keyframes blink {
+      0%,
+      48% {
+        opacity: 1;
+      }
+      49%,
+      100% {
+        opacity: 0;
+      }
+    }
+
+    @keyframes enter-glow {
+      0%,
+      100% {
+        opacity: 0.12;
+      }
+      50% {
+        opacity: 0.28;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .conversation,
+      .prompt-reveal,
+      .read-step,
+      .edit-step,
+      .test-step,
+      .answer,
+      .activity-dot,
+      .cursor,
+      .enter-glow {
+        animation: none;
+        opacity: 1;
+        transform: none;
+      }
+
+      .prompt-reveal {
+        width: 520px;
+      }
+
+      .thinking,
+      .progress-bar {
+        display: none;
+      }
+    }
+  </style>
+
+  <rect width="1200" height="720" fill="url(#page)" />
+  <circle cx="950" cy="100" r="170" fill="#7c3aed" opacity="0.08" filter="url(#violet-glow)" />
+  <circle cx="170" cy="630" r="150" fill="#22d3ee" opacity="0.035" filter="url(#violet-glow)" />
+
+  <g filter="url(#shadow)" clip-path="url(#screen-clip)">
+    <rect x="38" y="36" width="1124" height="648" rx="18" fill="#09090b" stroke="#29292e" stroke-width="2" />
+
+    <!-- Application header -->
+    <rect x="38" y="36" width="1124" height="58" fill="#0a0a0c" />
+    <line x1="38" y1="94" x2="1162" y2="94" stroke="#242428" />
+    <text x="58" y="61" fill="#f4f4f5" font-size="15" font-weight="700">AgentFormation</text>
+    <text x="58" y="80" fill="#71717a" font-size="11">developer@company.example · /workspace</text>
+    <g transform="translate(1080 56)" fill="none" stroke="#a1a1aa" stroke-width="1.7" stroke-linecap="round">
+      <circle cx="0" cy="0" r="6" />
+      <path d="M0-11v3M0 8v3M-11 0h3M8 0h3M-8-8l2 2M6 6l2 2M8-8L6-6M-6 6l-2 2" />
+    </g>
+    <path d="M1120 49h10v14h-10M1127 56h-14m0 0 4-4m-4 4 4 4" fill="none" stroke="#a1a1aa" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+
+    <!-- Tabs -->
+    <rect x="38" y="94" width="1124" height="50" fill="#08080a" />
+    <line x1="38" y1="144" x2="1162" y2="144" stroke="#242428" />
+    <rect x="48" y="102" width="116" height="34" rx="7" fill="#0d0d10" stroke="#1d1d21" />
+    <text x="64" y="124" fill="#71717a" font-size="12">Terminal</text>
+    <circle cx="136" cy="119" r="4" fill="#10b981" opacity="0.8" />
+    <text x="149" y="124" fill="#52525b" font-size="14">×</text>
+    <rect x="171" y="102" width="118" height="34" rx="7" fill="#131316" stroke="#2b2b31" />
+    <text x="188" y="124" fill="#f4f4f5" font-size="12">Codex</text>
+    <circle class="activity-dot" cx="256" cy="119" r="4" fill="#10b981" />
+    <text x="273" y="124" fill="#71717a" font-size="14">×</text>
+    <text x="1133" y="127" fill="#d4d4d8" font-size="24" text-anchor="middle">+</text>
+
+    <!-- Codex terminal -->
+    <rect x="48" y="153" width="1104" height="420" fill="url(#terminal)" />
+    <rect x="64" y="169" width="386" height="63" fill="#19191c" stroke="#68686f" stroke-width="1" />
+    <text x="80" y="192" fill="#8b8b93" font-size="12">model:</text>
+    <text x="154" y="192" fill="#e4e4e7" font-size="13">gpt-5.6-sol xhigh</text>
+    <text x="80" y="214" fill="#8b8b93" font-size="12">directory:</text>
+    <text x="154" y="214" fill="#e4e4e7" font-size="13">/workspace</text>
+    <text x="356" y="192" fill="#22d3ee" font-size="12">/model</text>
+
+    <g class="conversation">
+      <rect x="64" y="244" width="1072" height="43" fill="#343438" />
+      <text x="78" y="270" fill="#d4d4d8" font-size="14">›</text>
+      <g clip-path="url(#prompt-clip)">
+        <text x="90" y="270" fill="#f4f4f5" font-size="14">Add a health check and test it.</text>
+      </g>
+
+      <g class="thinking">
+        <text x="78" y="322" fill="#71717a" font-size="14">•</text>
+        <text x="100" y="322" fill="#a1a1aa" font-size="13" font-style="italic">Exploring the workspace</text>
+        <circle class="spinner-one" cx="290" cy="318" r="2.4" fill="#a78bfa" />
+        <circle class="spinner-two" cx="300" cy="318" r="2.4" fill="#a78bfa" />
+        <circle class="spinner-three" cx="310" cy="318" r="2.4" fill="#a78bfa" />
+      </g>
+
+      <rect class="progress-bar" x="100" y="337" width="0" height="2" rx="1" fill="url(#progress)" />
+
+      <g class="read-step">
+        <circle cx="80" cy="365" r="3" fill="#71717a" />
+        <text x="100" y="370" fill="#a1a1aa" font-size="13">Read</text>
+        <text x="145" y="370" fill="#71717a" font-size="13">14 files and found the existing API patterns</text>
+      </g>
+
+      <g class="edit-step">
+        <circle cx="80" cy="401" r="3" fill="#22d3ee" />
+        <text x="100" y="406" fill="#e4e4e7" font-size="13">Edited</text>
+        <text x="158" y="406" fill="#a1a1aa" font-size="13">the route and added focused coverage</text>
+      </g>
+
+      <g class="test-step">
+        <circle cx="80" cy="437" r="3" fill="#84cc16" />
+        <text x="100" y="442" fill="#e4e4e7" font-size="13">Ran</text>
+        <text x="135" y="442" fill="#a1a1aa" font-size="13">48 tests · formatting · types · production build</text>
+        <text x="490" y="442" fill="#84cc16" font-size="13">✓</text>
+      </g>
+
+      <g class="answer">
+        <circle cx="80" cy="483" r="3" fill="#a78bfa" />
+        <text x="100" y="488" fill="#f4f4f5" font-size="14">Done — the health check is covered and the production build passes.</text>
+        <text x="100" y="514" fill="#a1a1aa" font-size="13">The change is ready for review.</text>
+      </g>
+    </g>
+
+    <!-- Codex and tmux status lines -->
+    <rect x="48" y="531" width="1104" height="22" fill="#18181a" />
+    <text x="66" y="547" fill="#f4d6a0" font-size="11">gpt-5.6-sol xhigh</text>
+    <text x="198" y="547" fill="#71717a" font-size="11">·</text>
+    <text x="214" y="547" fill="#f59e7b" font-size="11">Context 4% used</text>
+    <text x="329" y="547" fill="#71717a" font-size="11">·</text>
+    <text x="345" y="547" fill="#d984c7" font-size="11">258K window</text>
+    <rect x="48" y="553" width="1104" height="20" fill="#4b9d00" />
+    <text x="58" y="568" fill="#071500" font-size="11" font-weight="700">[code] 0:codex*</text>
+    <text x="1138" y="568" fill="#071500" font-size="11" text-anchor="end">"workspace"</text>
+
+    <!-- Browser terminal controls -->
+    <rect x="38" y="584" width="1124" height="100" fill="#09090b" />
+    <line x1="38" y1="584" x2="1162" y2="584" stroke="#242428" />
+
+    <g font-size="11" text-anchor="middle">
+      <g fill="#111114" stroke="#303036">
+        <rect x="54" y="597" width="52" height="27" rx="6" />
+        <rect x="113" y="597" width="48" height="27" rx="6" />
+        <rect x="168" y="597" width="58" height="27" rx="6" />
+        <rect x="233" y="597" width="61" height="27" rx="6" />
+        <rect x="301" y="597" width="61" height="27" rx="6" />
+        <rect x="369" y="597" width="74" height="27" rx="6" />
+        <rect x="450" y="597" width="96" height="27" rx="6" />
+        <rect x="553" y="597" width="61" height="27" rx="6" />
+      </g>
+      <g fill="#d4d4d8">
+        <text x="80" y="615">Tab</text>
+        <text x="137" y="615">Esc</text>
+        <text x="197" y="615">Ctrl+C</text>
+        <text x="264" y="615">Ctrl+O</text>
+        <text x="331" y="615">Clear</text>
+        <text x="406" y="615">New line</text>
+        <text x="498" y="615">Select text</text>
+        <text x="584" y="615">Copy</text>
+      </g>
+    </g>
+
+    <rect x="54" y="636" width="44" height="36" rx="7" fill="#111114" stroke="#303036" />
+    <path d="M75 648c-5 0-8 4-8 8s3 7 7 7h2c4 0 7-3 7-7v-8c0-3-2-5-5-5s-5 2-5 5v8c0 1 1 2 2 2s2-1 2-2v-7" fill="none" stroke="#d4d4d8" stroke-width="1.5" stroke-linecap="round" />
+
+    <rect x="106" y="636" width="918" height="36" rx="7" fill="url(#input)" stroke="#29292e" />
+    <text x="124" y="659" fill="#71717a" font-size="12">Paste or type here — keystrokes go live…</text>
+    <rect class="cursor" x="124" y="646" width="2" height="17" fill="#a78bfa" />
+
+    <rect class="enter-glow" x="1034" y="632" width="112" height="44" rx="11" fill="#8b5cf6" filter="url(#violet-glow)" />
+    <rect x="1034" y="636" width="112" height="36" rx="7" fill="#8b5cf6" />
+    <text x="1051" y="659" fill="#160d24" font-size="16">↵</text>
+    <text x="1074" y="659" fill="#160d24" font-size="12" font-weight="700">Enter</text>
+  </g>
+</svg>
