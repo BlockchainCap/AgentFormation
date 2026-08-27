@@ -18,12 +18,16 @@ AUTH_COGNITO_ID=build-client \
 AUTH_COGNITO_SECRET=build-secret \
 AUTH_COGNITO_IDENTITY_PROVIDER=IdentityCenter \
 AUTH_COGNITO_ISSUER=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_build \
+AUTH_URL=https://localhost \
 AGENTFORMATION_DEPLOYMENT=agentformation \
 PROVISIONING_STATE_MACHINE_ARN=arn:aws:states:us-east-1:000000000000:stateMachine:build-only \
 AWS_REGION=us-east-1 \
 USER_REGISTRY_TABLE=build-users \
+CONTROL_TABLE=build-control \
 UPLOAD_BUCKET=build-uploads \
 SESSION_DOCUMENT_NAME=build-terminal \
+UPLOAD_DELIVERY_DOCUMENT_NAME=build-upload-delivery \
+OAUTH_RELAY_DOCUMENT_NAME=build-oauth-relay \
   bun run build
 
 cd "$ROOT_DIR"

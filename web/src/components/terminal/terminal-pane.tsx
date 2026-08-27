@@ -6,22 +6,25 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { TerminalPaneView } from "./terminal-pane-view";
+import { getFollowUpConnectMode } from "./terminal-connection-state";
 import { useTerminalPaneEffects } from "./use-terminal-pane-effects";
 import { useTerminalTextSelection } from "./use-terminal-text-selection";
+import { useTerminalUpload } from "./use-terminal-upload";
 import {
-  SessionInfo,
-  TerminalPaneProps,
-  UploadCreateResponse,
-  UploadCompleteResponse,
-  PendingAttachment,
+  getAttachmentSubmitSuffix,
+  readSessionResponse,
+  terminateSession,
+  type SessionInfo,
+} from "./terminal-api";
+import {
+  type TerminalPaneProps,
   ConnectionState,
   ConnectMode,
-  UploadStatus,
   SESSION_REQUEST_TIMEOUT_MS,
-  MAX_ATTACHMENT_UPLOAD_BYTES,
   XTERM_SCROLLBACK_LINES,
   TERMINAL_FONT_SIZE,
   TERMINAL_LINE_HEIGHT,
@@ -29,28 +32,25 @@ import {
   TERMINAL_SCROLL_LINE_PX,
   TERMINAL_SCROLL_OPTIONS,
   TERMINAL_VERTICAL_PADDING_PX,
+  TERMINAL_MIN_COLUMNS,
+  TERMINAL_MIN_ROWS,
   CLEAR_TERMINAL_INPUT,
   DpadPosition,
   terminalLinkHandler,
-  readJsonResponse,
-  uploadFileToUrl,
-  getAttachmentSubmitSuffix,
   getTerminalTheme,
   buildInputEditSequence,
   isSubmitShortcut,
   getDefaultDpadPosition,
   clampDpadPosition,
-  terminateSession,
-  readSessionResponse,
   isTerminalAtBottom,
   getTerminalColumnsForWidth,
   getDominantScrollAxis,
   getWheelScrollPixels,
-  filterStartupProfileEchoes,
-  containsStartupProfileEcho,
-  normalizeBootstrapText,
   createWrappedUrlLinkProvider,
 } from "./terminal-shared";
+
+const MAX_PAUSED_OUTPUT_CHARACTERS = 1_000_000;
+type TransportResetMode = "fresh" | "resume" | "background" | "unmount";
 
 export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -62,34 +62,43 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
   const seqRef = useRef(0);
   const sessionRef = useRef<SessionInfo | null>(null);
   const requestAbortRef = useRef<AbortController | null>(null);
-  const uploadInFlightRef = useRef(false);
   const connectionIdRef = useRef(0);
   const connectionStartedAtRef = useRef(0);
+  const connectInFlightRef = useRef(false);
+  const submitInFlightRef = useRef(false);
+  const queuedConnectModeRef = useRef<ConnectMode | null>(null);
   const connectRef = useRef<(mode?: ConnectMode) => Promise<void>>(
     async () => undefined,
   );
   const lastTermSizeRef = useRef<{ rows: number; cols: number } | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeTimeoutsRef = useRef<number[]>([]);
+  const terminalFitFrameRef = useRef<number | null>(null);
+  const terminalScrollFrameRef = useRef<number | null>(null);
+  const terminalScrollTimeoutRef = useRef<number | null>(null);
   const stateRef = useRef<ConnectionState>("idle");
   const isReviewingHistoryRef = useRef(false);
-  const startupInputClearSentRef = useRef(false);
   const pendingTerminalOutputRef = useRef<string[]>([]);
+  const pendingTerminalOutputSizeRef = useRef(0);
   const [state, setState] = useState<ConnectionState>("idle");
   const [error, setError] = useState("");
   const [inputValue, setInputValue] = useState("");
-  const [pendingAttachments, setPendingAttachments] = useState<
-    PendingAttachment[]
-  >([]);
-  const [uploadStatus, setUploadStatus] = useState<UploadStatus>({
-    state: "idle",
-  });
-  const [uploadError, setUploadError] = useState("");
+  const [isSubmittingInput, setIsSubmittingInput] = useState(false);
   const [isReviewingHistory, setIsReviewingHistory] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState<number | null>(null);
   const [dpadPosition, setDpadPosition] = useState<DpadPosition | null>(null);
   const isConnected = state === "connected";
   const inputRef = useRef<HTMLInputElement>(null);
+  const {
+    handleFileSelection,
+    pendingAttachments,
+    removePendingAttachment,
+    resetUploadState,
+    setPendingAttachments,
+    uploadError,
+    uploadInFlightRef,
+    uploadStatus,
+  } = useTerminalUpload({ inputRef, tmuxSession });
   const dpadDragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -110,18 +119,14 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     resetTextSelection,
     syncTerminalSelection,
     toggleTextSelectionMode,
-  } = useTerminalTextSelection({ terminalRef, termRef });
+  } = useTerminalTextSelection({ isActive, terminalRef, termRef });
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
 
   const resetTransport = useCallback(
-    (options?: {
-      clearSession?: boolean;
-      disposeTerminal?: boolean;
-      terminateSession?: boolean;
-    }) => {
+    (mode: TransportResetMode) => {
       connectionIdRef.current += 1;
       if (resizeFrameRef.current !== null) {
         cancelAnimationFrame(resizeFrameRef.current);
@@ -129,20 +134,29 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
       }
       resizeTimeoutsRef.current.forEach(window.clearTimeout);
       resizeTimeoutsRef.current = [];
+      if (terminalFitFrameRef.current !== null) {
+        cancelAnimationFrame(terminalFitFrameRef.current);
+        terminalFitFrameRef.current = null;
+      }
+      if (terminalScrollFrameRef.current !== null) {
+        cancelAnimationFrame(terminalScrollFrameRef.current);
+        terminalScrollFrameRef.current = null;
+      }
+      if (terminalScrollTimeoutRef.current !== null) {
+        window.clearTimeout(terminalScrollTimeoutRef.current);
+        terminalScrollTimeoutRef.current = null;
+      }
       requestAbortRef.current?.abort();
       requestAbortRef.current = null;
+      queuedConnectModeRef.current = null;
       isReviewingHistoryRef.current = false;
-      startupInputClearSentRef.current = false;
       pendingTerminalOutputRef.current = [];
+      pendingTerminalOutputSizeRef.current = 0;
       setIsReviewingHistory(false);
-      setPendingAttachments([]);
-      setUploadStatus({ state: "idle" });
-      setUploadError("");
+      resetUploadState();
       resetTextSelection();
 
       const activeSession = sessionRef.current;
-      const shouldDisposeTerminal = options?.disposeTerminal ?? true;
-
       if (socketRef.current) {
         try {
           socketRef.current.close();
@@ -151,36 +165,36 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
         }
         socketRef.current = null;
       }
-      if (shouldDisposeTerminal && terminalRef.current) {
+      if (terminalRef.current) {
         terminalRef.current.dispose();
         terminalRef.current = null;
       }
-      if (shouldDisposeTerminal) {
-        fitAddonRef.current = null;
-      }
+      fitAddonRef.current = null;
       seqRef.current = 0;
       lastTermSizeRef.current = null;
+      stateRef.current = "idle";
+      if (mode !== "unmount") setState("idle");
 
-      if (options?.clearSession ?? options?.terminateSession) {
+      if (mode !== "resume") {
         sessionRef.current = null;
       }
 
       if (
-        options?.terminateSession &&
+        (mode === "fresh" || mode === "unmount") &&
         activeSession?.sessionId &&
         activeSession.terminateToken
       ) {
         terminateSession(activeSession.sessionId, activeSession.terminateToken);
       }
     },
-    [resetTextSelection],
+    [resetTextSelection, resetUploadState],
   );
 
   const getTermOptions = useCallback(() => {
     const terminal = terminalRef.current;
     return {
-      rows: terminal?.rows ?? 24,
-      cols: terminal?.cols ?? 80,
+      rows: Math.max(TERMINAL_MIN_ROWS, terminal?.rows ?? 24),
+      cols: Math.max(TERMINAL_MIN_COLUMNS, terminal?.cols ?? 80),
     };
   }, []);
 
@@ -205,11 +219,14 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
       const wasAtBottom = isTerminalAtBottom(terminal);
       const dimensions = fitAddon.proposeDimensions();
       const rows = Math.max(
-        1,
+        TERMINAL_MIN_ROWS,
         dimensions?.rows ??
           Math.floor(container.clientHeight / TERMINAL_SCROLL_LINE_PX),
       );
-      terminal.resize(getTerminalColumnsForWidth(container), rows);
+      terminal.resize(
+        Math.max(TERMINAL_MIN_COLUMNS, getTerminalColumnsForWidth(container)),
+        rows,
+      );
       if (wasAtBottom && !isReviewingHistoryRef.current) {
         terminal.scrollToBottom();
       }
@@ -234,10 +251,12 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     const terminal = terminalRef.current;
     const output = pendingTerminalOutputRef.current.join("");
     pendingTerminalOutputRef.current = [];
+    pendingTerminalOutputSizeRef.current = 0;
     if (!terminal || !output) return;
 
     const shouldFollowOutput = isTerminalAtBottom(terminal);
     terminal.write(output, () => {
+      if (terminalRef.current !== terminal) return;
       if (shouldFollowOutput && !isReviewingHistoryRef.current) {
         terminal.scrollToBottom();
       }
@@ -268,6 +287,7 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
   const syncTerminalSize = useCallback(
     async (options?: { force?: boolean }) => {
       const socket = socketRef.current;
+      const connectionId = connectionIdRef.current;
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
       const termOptions = fitTerminal();
@@ -282,6 +302,13 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
 
       lastTermSizeRef.current = termOptions;
       const { ssm } = await import("ssm-session");
+      if (
+        connectionId !== connectionIdRef.current ||
+        socketRef.current !== socket ||
+        socket.readyState !== WebSocket.OPEN
+      ) {
+        return;
+      }
       ssm.sendInitMessage(socket, termOptions);
     },
     [fitTerminal],
@@ -305,9 +332,9 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     resizeTimeoutsRef.current.forEach(window.clearTimeout);
     resizeTimeoutsRef.current = [];
 
-    for (const delay of [0, 80, 200, 500, 900]) {
+    for (const delay of [0, 150, 500]) {
       const timeoutId = window.setTimeout(() => {
-        scheduleTerminalSizeSync({ force: true });
+        scheduleTerminalSizeSync();
       }, delay);
       resizeTimeoutsRef.current.push(timeoutId);
     }
@@ -321,21 +348,29 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
       : 24 * TERMINAL_SCROLL_LINE_PX;
 
     return {
-      rows: Math.max(1, Math.floor(height / TERMINAL_SCROLL_LINE_PX)),
-      cols: container ? getTerminalColumnsForWidth(container) : 80,
+      rows: Math.max(
+        TERMINAL_MIN_ROWS,
+        Math.floor(height / TERMINAL_SCROLL_LINE_PX),
+      ),
+      cols: Math.max(
+        TERMINAL_MIN_COLUMNS,
+        container ? getTerminalColumnsForWidth(container) : 80,
+      ),
     };
   }, []);
 
   const connect = useCallback(
     async (mode: ConnectMode = "start") => {
+      if (connectInFlightRef.current) {
+        queuedConnectModeRef.current = mode;
+        return;
+      }
+      connectInFlightRef.current = true;
+      let fallbackToFreshSession = false;
       const previousSession = sessionRef.current;
       const shouldResume = mode === "resume" && previousSession !== null;
 
-      resetTransport({
-        clearSession: !shouldResume,
-        disposeTerminal: true,
-        terminateSession: mode === "start",
-      });
+      resetTransport(shouldResume ? "resume" : "fresh");
 
       const connectionId = connectionIdRef.current;
       const requestController = new AbortController();
@@ -343,7 +378,8 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
       requestAbortRef.current = requestController;
       connectionStartedAtRef.current = Date.now();
 
-      setState(shouldResume ? "resuming" : "connecting");
+      stateRef.current = shouldResume ? "resuming" : "connecting";
+      setState(stateRef.current);
       setError("");
 
       try {
@@ -371,10 +407,11 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
           },
         ).finally(() => window.clearTimeout(timeoutId));
 
-        if (connectionId !== connectionIdRef.current) return;
-
         const info = await readSessionResponse(res);
-        if (connectionId !== connectionIdRef.current) return;
+        if (connectionId !== connectionIdRef.current) {
+          terminateSession(info.sessionId, info.terminateToken);
+          return;
+        }
 
         sessionRef.current = info;
 
@@ -438,16 +475,9 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
           termRef.current.innerHTML = "";
           terminal.open(termRef.current);
           lastTermSizeRef.current = fitTerminal();
-          if (!shouldResume && info.bootstrapText) {
-            const bootstrapText = normalizeBootstrapText(info.bootstrapText);
-            if (bootstrapText) {
-              terminal.write(bootstrapText, () => {
-                terminal.scrollToBottom();
-                updateTerminalReviewState();
-              });
-            }
-          }
-          requestAnimationFrame(() => {
+          terminalFitFrameRef.current = requestAnimationFrame(() => {
+            terminalFitFrameRef.current = null;
+            if (connectionId !== connectionIdRef.current) return;
             lastTermSizeRef.current = fitTerminal();
           });
         }
@@ -475,59 +505,85 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
         socket.addEventListener("message", (event) => {
           if (connectionId !== connectionIdRef.current) return;
 
-          const agentMessage = ssm.decode(event.data);
-          ssm.sendACK(socket, agentMessage);
+          let agentMessage: ReturnType<typeof ssm.decode>;
+          try {
+            agentMessage = ssm.decode(event.data);
+            ssm.sendACK(socket, agentMessage);
+          } catch {
+            socket.close();
+            stateRef.current = "error";
+            setState("error");
+            setError("The terminal received an invalid session message.");
+            return;
+          }
 
           if (agentMessage.payloadType === 1) {
-            const text = textDecoder.decode(agentMessage.payload);
+            const text = textDecoder.decode(agentMessage.payload, {
+              stream: true,
+            });
             if (text) {
-              const isInitialOutput = stateRef.current !== "connected";
-              if (
-                isInitialOutput &&
-                !startupInputClearSentRef.current &&
-                containsStartupProfileEcho(text) &&
-                socket.readyState === WebSocket.OPEN
-              ) {
-                startupInputClearSentRef.current = true;
-                ssm.sendText(
-                  socket,
-                  textEncoder.encode(CLEAR_TERMINAL_INPUT),
-                  seqRef.current++,
-                );
-              }
-              const outputText = !isInitialOutput
-                ? text
-                : filterStartupProfileEchoes(text);
+              const outputText = text;
               const shouldFollowOutput = isTerminalAtBottom(terminal);
               if (!outputText) {
                 terminal.scrollToBottom();
                 updateTerminalReviewState();
+                stateRef.current = "connected";
                 setState("connected");
                 return;
               }
-              if (isTextSelectionModeRef.current) {
+              if (
+                isTextSelectionModeRef.current ||
+                pendingTerminalOutputRef.current.length > 0
+              ) {
                 pendingTerminalOutputRef.current.push(outputText);
+                pendingTerminalOutputSizeRef.current += outputText.length;
+                if (
+                  !isTextSelectionModeRef.current ||
+                  pendingTerminalOutputSizeRef.current >=
+                    MAX_PAUSED_OUTPUT_CHARACTERS
+                ) {
+                  flushPendingTerminalOutput();
+                }
+                stateRef.current = "connected";
                 setState("connected");
                 return;
               }
               terminal.write(outputText, () => {
+                if (
+                  connectionId !== connectionIdRef.current ||
+                  terminalRef.current !== terminal
+                ) {
+                  return;
+                }
                 if (shouldFollowOutput && !isReviewingHistoryRef.current) {
                   terminal.scrollToBottom();
                 }
                 updateTerminalReviewState();
               });
             }
+            stateRef.current = "connected";
             setState("connected");
           } else if (agentMessage.payloadType === 17) {
             const termOptions = fitTerminal();
             lastTermSizeRef.current = termOptions;
             ssm.sendInitMessage(socket, termOptions);
+            stateRef.current = "connected";
             setState("connected");
             scheduleTerminalSizeBurst();
-            requestAnimationFrame(() =>
-              scrollToTerminalBottom({ force: true }),
-            );
-            window.setTimeout(() => {
+            if (terminalScrollFrameRef.current !== null) {
+              cancelAnimationFrame(terminalScrollFrameRef.current);
+            }
+            if (terminalScrollTimeoutRef.current !== null) {
+              window.clearTimeout(terminalScrollTimeoutRef.current);
+            }
+            terminalScrollFrameRef.current = requestAnimationFrame(() => {
+              terminalScrollFrameRef.current = null;
+              if (connectionId !== connectionIdRef.current) return;
+              scrollToTerminalBottom({ force: true });
+            });
+            terminalScrollTimeoutRef.current = window.setTimeout(() => {
+              terminalScrollTimeoutRef.current = null;
+              if (connectionId !== connectionIdRef.current) return;
               scrollToTerminalBottom({ force: true });
             }, 120);
           }
@@ -542,6 +598,22 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
           }
 
           socketRef.current = null;
+          const trailingText = textDecoder.decode();
+          if (trailingText && terminalRef.current === terminal) {
+            if (
+              isTextSelectionModeRef.current ||
+              pendingTerminalOutputRef.current.length > 0
+            ) {
+              pendingTerminalOutputRef.current.push(trailingText);
+              pendingTerminalOutputSizeRef.current += trailingText.length;
+              if (!isTextSelectionModeRef.current) {
+                flushPendingTerminalOutput();
+              }
+            } else {
+              terminal.write(trailingText);
+            }
+          }
+          stateRef.current = "error";
           setState("error");
           setError("Session ended. Reconnect to attach to this tmux tab.");
         });
@@ -553,6 +625,7 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
             return;
           }
 
+          stateRef.current = "error";
           setState("error");
           setError(
             "WebSocket connection lost. Reconnect to attach to this tmux tab.",
@@ -575,26 +648,44 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
 
         if (shouldResume) {
           sessionRef.current = null;
-          void connectRef.current("start");
-          return;
+          if (previousSession) {
+            terminateSession(
+              previousSession.sessionId,
+              previousSession.terminateToken,
+            );
+          }
+          fallbackToFreshSession = true;
+        } else {
+          stateRef.current = "error";
+          setState("error");
+          setError(
+            didTimeout
+              ? "Terminal session request timed out. Try reconnecting."
+              : err instanceof Error
+                ? err.message
+                : "Connection failed",
+          );
         }
-
-        setState("error");
-        setError(
-          didTimeout
-            ? "Terminal session request timed out. Try reconnecting."
-            : err instanceof Error
-              ? err.message
-              : "Connection failed",
-        );
       } finally {
         if (requestAbortRef.current === requestController) {
           requestAbortRef.current = null;
+        }
+        connectInFlightRef.current = false;
+        const queuedMode = getFollowUpConnectMode({
+          connectionId,
+          currentConnectionId: connectionIdRef.current,
+          fallbackToFreshSession,
+          queuedConnectMode: queuedConnectModeRef.current,
+        });
+        queuedConnectModeRef.current = null;
+        if (queuedMode) {
+          void connectRef.current(queuedMode);
         }
       }
     },
     [
       fitTerminal,
+      flushPendingTerminalOutput,
       getRequestedTermOptions,
       isTextSelectionModeRef,
       resetTransport,
@@ -610,14 +701,16 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     connectRef.current = connect;
   }, [connect]);
 
-  const sendInput = useCallback(async (text: string) => {
-    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN)
-      return;
+  const sendInput = useCallback(async (text: string): Promise<boolean> => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
     const { ssm } = await import("ssm-session");
-    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN)
-      return;
+    if (socketRef.current !== socket || socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
     const encoder = new TextEncoder();
-    ssm.sendText(socketRef.current!, encoder.encode(text), seqRef.current++);
+    ssm.sendText(socket, encoder.encode(text), seqRef.current++);
+    return true;
   }, []);
 
   const lastValueRef = useRef("");
@@ -628,8 +721,8 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     void sendInput(CLEAR_TERMINAL_INPUT);
   }, [sendInput]);
 
-  const handleQuickKeyPointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>) => {
+  const handleQuickKeyActivate = useCallback(
+    (event: ReactMouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
 
       if (event.currentTarget.dataset.action === "clear") {
@@ -660,115 +753,34 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     [sendInput],
   );
 
-  const handleSubmit = useCallback(() => {
-    const attachmentSuffix = getAttachmentSubmitSuffix(
-      lastValueRef.current,
-      pendingAttachments,
-    );
-    if (attachmentSuffix) {
-      void sendInput(attachmentSuffix).then(() => {
-        window.setTimeout(() => {
-          void sendInput("\r");
-        }, 50);
-      });
-    } else {
-      void sendInput("\r");
+  const handleSubmit = useCallback(async () => {
+    if (submitInFlightRef.current || uploadInFlightRef.current) return;
+    submitInFlightRef.current = true;
+    setIsSubmittingInput(true);
+    try {
+      const attachmentSuffix = getAttachmentSubmitSuffix(
+        lastValueRef.current,
+        pendingAttachments,
+      );
+      const sent = await sendInput(`${attachmentSuffix}\r`);
+      if (sent) {
+        setInputValue("");
+        lastValueRef.current = "";
+        setPendingAttachments([]);
+      } else {
+        setError("Terminal connection was lost. Reconnect and submit again.");
+      }
+    } catch {
+      setError("Terminal input could not be sent. Reconnect and submit again.");
+    } finally {
+      submitInFlightRef.current = false;
+      setIsSubmittingInput(false);
     }
-    setInputValue("");
-    lastValueRef.current = "";
-    setPendingAttachments([]);
-  }, [pendingAttachments, sendInput]);
-
-  const removePendingAttachment = useCallback((attachmentId: string) => {
-    setPendingAttachments((current) =>
-      current.filter((attachment) => attachment.id !== attachmentId),
-    );
-  }, []);
-
-  const handleFileSelection = useCallback(
-    async (event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      event.target.value = "";
-      if (!file || uploadInFlightRef.current) return;
-
-      if (file.size < 1 || file.size > MAX_ATTACHMENT_UPLOAD_BYTES) {
-        setUploadError("Files must be between 1 byte and 50 MB.");
-        return;
-      }
-
-      uploadInFlightRef.current = true;
-      setUploadError("");
-      setUploadStatus({ state: "uploading", filename: file.name, progress: 0 });
-
-      try {
-        const mimeType = file.type || "application/octet-stream";
-        const createResponse = await fetch("/api/session/upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filename: file.name,
-            mimeType,
-            fileSize: file.size,
-          }),
-        });
-        const upload =
-          await readJsonResponse<UploadCreateResponse>(createResponse);
-
-        await uploadFileToUrl(
-          file,
-          upload.uploadUrl,
-          upload.requiredHeaders,
-          (progress) => {
-            setUploadStatus({
-              state: "uploading",
-              filename: file.name,
-              progress,
-            });
-          },
-        );
-
-        setUploadStatus({ state: "completing", filename: file.name });
-        const completeResponse = await fetch("/api/session/upload", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            key: upload.key,
-            filename: upload.filename,
-            mimeType: upload.mimeType,
-            fileSize: upload.fileSize,
-            tmuxSession,
-          }),
-        });
-        const completed =
-          await readJsonResponse<UploadCompleteResponse>(completeResponse);
-
-        if (!completed.path) {
-          throw new Error("Upload completed without a remote file path");
-        }
-
-        setPendingAttachments((current) => [
-          ...current,
-          {
-            ...completed,
-            id: completed.path,
-          },
-        ]);
-        inputRef.current?.focus();
-        setUploadStatus({ state: "idle" });
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : "File upload failed";
-        setUploadError(message);
-        setUploadStatus({ state: "idle" });
-      } finally {
-        uploadInFlightRef.current = false;
-      }
-    },
-    [tmuxSession],
-  );
+  }, [pendingAttachments, sendInput, setPendingAttachments, uploadInFlightRef]);
 
   const handleDpadPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (dpadDragRef.current) return;
       const position = dpadPosition ?? getDefaultDpadPosition();
       dpadDragRef.current = {
         pointerId: e.pointerId,
@@ -828,7 +840,7 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
       if (e.key === "Enter") {
         e.preventDefault();
         if (isSubmitShortcut(e)) {
-          handleSubmit();
+          void handleSubmit();
           return;
         }
 
@@ -838,8 +850,8 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     [handleSubmit],
   );
 
-  const handleDpadButtonPointerDown = useCallback(
-    (e: ReactPointerEvent<HTMLButtonElement>) => {
+  const handleDpadButtonActivate = useCallback(
+    (e: ReactMouseEvent<HTMLButtonElement>) => {
       const seq = e.currentTarget.dataset.seq;
       if (!seq) return;
 
@@ -871,7 +883,11 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
       return;
     }
 
-    requestAbortRef.current?.abort();
+    if (connectInFlightRef.current) {
+      queuedConnectModeRef.current = sessionRef.current ? "resume" : "start";
+      requestAbortRef.current?.abort();
+      return;
+    }
     void connect(sessionRef.current ? "resume" : "start");
   }, [connect, scheduleTerminalSizeBurst]);
 
@@ -879,7 +895,6 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     connect,
     dpadPosition,
     isActive,
-    isConnected,
     reconnectIfNeeded,
     resetTransport,
     scheduleTerminalSizeBurst,
@@ -899,14 +914,14 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
       error={error}
       fileInputRef={fileInputRef}
       handleChange={handleChange}
-      handleDpadButtonPointerDown={handleDpadButtonPointerDown}
+      handleDpadButtonActivate={handleDpadButtonActivate}
       handleDpadPointerCancel={handleDpadPointerCancel}
       handleDpadPointerDown={handleDpadPointerDown}
       handleDpadPointerMove={handleDpadPointerMove}
       handleDpadPointerUp={handleDpadPointerUp}
       handleFileSelection={handleFileSelection}
       handleKeyDown={handleKeyDown}
-      handleQuickKeyPointerDown={handleQuickKeyPointerDown}
+      handleQuickKeyActivate={handleQuickKeyActivate}
       handleSelectionPointerCancel={handleSelectionPointerCancel}
       handleSelectionPointerDown={handleSelectionPointerDown}
       handleSelectionPointerMove={handleSelectionPointerMove}
@@ -917,6 +932,7 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
       inputValue={inputValue}
       isActive={isActive}
       isConnected={isConnected}
+      isSubmittingInput={isSubmittingInput}
       isReviewingHistory={isReviewingHistory}
       isTextSelectionMode={isTextSelectionMode}
       pendingAttachments={pendingAttachments}

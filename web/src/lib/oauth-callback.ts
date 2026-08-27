@@ -28,6 +28,9 @@ export function validateOAuthCallbackUrl(
 
   const rawUrl = input.trim();
   if (!rawUrl) throw new ApiError(400, "Callback URL is required");
+  if (/[\u0000-\u001f\u007f]/.test(rawUrl)) {
+    throw new ApiError(400, "Callback URL contains invalid characters");
+  }
   if (rawUrl.length > MAX_CALLBACK_URL_LENGTH) {
     throw new ApiError(400, "Callback URL is too long");
   }

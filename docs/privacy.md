@@ -8,9 +8,22 @@ The deployed system stores or processes:
 - assigned employees' email addresses and federated Cognito identifiers;
 - the mapping between an employee and an EC2 runtime;
 - environment-creation status and AWS Step Functions execution history;
+- short-lived request counters and upload claims in DynamoDB;
 - encrypted runtime files on EBS;
-- uploaded files in S3 until copied or expired; and
+- uploaded files in S3 until copied or expired;
+- terminal tab labels in that browser's local storage until app sign-out; and
 - normal AWS service, access, build, and application logs.
+
+Each browser upload is limited to 50 MiB at the S3 write boundary, restricted to
+one random key and declared content type, copied to a server-owned sealed key
+before delivery, and deleted from staging after the runtime command finishes.
+The one-day bucket rule is a backstop if immediate cleanup cannot be confirmed.
+
+Copying terminal text places it in the device's system clipboard. AgentFormation
+clears its own selection state after a successful copy, but browsers do not offer
+a safe, reliable way for a web app to erase the system clipboard later. Treat
+copied secrets like any other clipboard secret and replace them before sharing or
+leaving the device unattended.
 
 The IAM Identity Center metadata address or downloaded XML contains
 organization-specific SAML endpoints and public signing certificates. The

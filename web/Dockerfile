@@ -21,11 +21,15 @@ RUN mkdir -p public && \
     AUTH_COGNITO_IDENTITY_PROVIDER=IdentityCenter \
     AUTH_COGNITO_ISSUER=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_build \
     AUTH_URL=https://agentformation.example \
+    AWS_REGION=us-east-1 \
     AGENTFORMATION_DEPLOYMENT=agentformation \
+    CONTROL_TABLE=build-only \
     PROVISIONING_STATE_MACHINE_ARN=arn:aws:states:us-east-1:000000000000:stateMachine:build-only \
     USER_REGISTRY_TABLE=build-only \
     UPLOAD_BUCKET=build-only \
     SESSION_DOCUMENT_NAME=build-only \
+    UPLOAD_DELIVERY_DOCUMENT_NAME=build-only \
+    OAUTH_RELAY_DOCUMENT_NAME=build-only \
     bun run build
 
 # Build the Next.js application on the host architecture. Turbopack is not

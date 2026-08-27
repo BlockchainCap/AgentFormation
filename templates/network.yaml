@@ -4,7 +4,7 @@ Description: AgentFormation private runtime network with optional AWS service en
 Parameters:
   DeploymentName:
     Type: String
-    AllowedPattern: '^[a-z][a-z0-9-]{2,31}$'
+    AllowedPattern: '^(?!.*-runtime-)[a-z][a-z0-9-]{2,31}$'
   NetworkMode:
     Type: String
     Default: private-nat
@@ -131,6 +131,26 @@ Resources:
         - { Key: Name, Value: !Sub '${AWS::StackName}-runtime' }
         - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
 
+  BuildSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: AgentFormation image builds use outbound web traffic only.
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Ubuntu apt package repositories that still use HTTP.
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Verified packages and AWS service APIs over TLS.
+      Tags:
+        - { Key: Name, Value: !Sub '${AWS::StackName}-build' }
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
   EndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Condition: UsePrivateEndpoints
@@ -142,6 +162,10 @@ Resources:
           FromPort: 443
           ToPort: 443
           SourceSecurityGroupId: !Ref RuntimeSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref BuildSecurityGroup
       Tags:
         - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
 
@@ -205,3 +229,6 @@ Outputs:
   RuntimeSecurityGroupId:
     Value: !Ref RuntimeSecurityGroup
     Export: { Name: !Sub '${AWS::StackName}-RuntimeSecurityGroupId' }
+  BuildSecurityGroupId:
+    Value: !Ref BuildSecurityGroup
+    Export: { Name: !Sub '${AWS::StackName}-BuildSecurityGroupId' }

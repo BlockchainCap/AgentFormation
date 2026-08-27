@@ -25,12 +25,27 @@ deploy_stack() {
   aws_cli "${arguments[@]}"
 }
 
-delete_stack() {
+delete_stack_if_present() {
   local stack="$1"
-  if ! aws_cli cloudformation describe-stacks --stack-name "$stack" >/dev/null 2>&1; then
-    return
+  local stack_status
+  if stack_exists "$stack"; then
+    :
+  else
+    stack_status=$?
+    [[ "$stack_status" -eq 1 ]] && return 1
+    return "$stack_status"
   fi
   say "Deleting $stack"
-  aws_cli cloudformation delete-stack --stack-name "$stack"
-  aws_cli cloudformation wait stack-delete-complete --stack-name "$stack"
+  aws_cli cloudformation delete-stack --stack-name "$stack" || return 2
+  aws_cli cloudformation wait stack-delete-complete --stack-name "$stack" || return 2
+}
+
+delete_stack() {
+  local stack="$1"
+  local delete_status=0
+  delete_stack_if_present "$stack" || delete_status=$?
+  case "$delete_status" in
+    0 | 1) return 0 ;;
+    *) return "$delete_status" ;;
+  esac
 }

@@ -5,15 +5,6 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 
-export interface SessionInfo {
-  sessionId: string;
-  streamUrl: string;
-  tokenValue: string;
-  terminateToken: string;
-  instanceId?: string;
-  bootstrapText?: string;
-}
-
 export interface TerminalTab {
   id: string;
   label: string;
@@ -29,40 +20,15 @@ export interface TerminalPaneProps {
   isActive: boolean;
 }
 
-export interface UploadCreateResponse {
-  key: string;
-  filename: string;
-  mimeType: string;
-  fileSize: number;
-  uploadUrl: string;
-  method: "PUT";
-  requiredHeaders: Record<string, string>;
-}
-
-export interface UploadCompleteResponse {
-  path: string;
-  filename: string;
-  mimeType: string;
-  fileSize: number;
-}
-
-export interface PendingAttachment extends UploadCompleteResponse {
-  id: string;
-}
-
 export type ConnectionState =
   "idle" | "connecting" | "resuming" | "connected" | "error";
 export type ConnectMode = "start" | "resume";
 export type TerminalScrollAxis = "horizontal" | "vertical";
-export type UploadStatus =
-  | { state: "idle" }
-  | { state: "uploading"; filename: string; progress: number }
-  | { state: "completing"; filename: string };
 
 export const DEFAULT_TMUX_SESSION = "code";
 export const SESSION_REQUEST_TIMEOUT_MS = 20_000;
-export const MAX_ATTACHMENT_UPLOAD_BYTES = 50 * 1024 * 1024;
 export const RECENT_CLOSED_TABS_LIMIT = 20;
+export const MAX_TERMINAL_TABS = 8;
 export const XTERM_SCROLLBACK_LINES = 100_000;
 export const TERMINAL_MAX_COLUMNS = 132;
 export const TERMINAL_MAX_WIDTH_FACTOR = 1.25;
@@ -78,44 +44,17 @@ export const TERMINAL_SCROLL_OPTIONS = {
   fastScrollSensitivity: 5,
 } as const;
 export const TERMINAL_VERTICAL_PADDING_PX = 16;
+export const TERMINAL_MIN_COLUMNS = 20;
+export const TERMINAL_MIN_ROWS = 5;
 export const TERMINAL_GESTURE_LOCK_PX = 8;
 export const TMUX_SESSION_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 export const WEB_LINK_START_REGEX = /https?:\/\/[^\s"'<>`]+/g;
 export const WEB_LINK_CONTINUATION_REGEX =
   /^([A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+)/;
-export const WEB_LINK_CONTEXT_LINES = 32;
+export const WEB_LINK_MAX_CONTINUATION_LINES = 16;
+export const WEB_LINK_MAX_CHARACTERS = 4_096;
 export const WEB_LINK_CONTROL_OR_SPACE_REGEX = /[\u0000-\u0020\u007f]+/g;
-export const STARTUP_PROFILE_ECHO_MARKERS = [
-  "set +o history",
-  "unset HISTFILE",
-  "export HISTCONTROL=",
-  "set -e",
-  "stty -echo",
-  "REMOTE_USER=",
-  "REMOTE_HOME=",
-  "export HOME=",
-  "export USER=",
-  "export LOGNAME=",
-  "export SHELL=",
-  "export PATH=",
-  "TMUX_SESSION=",
-  "REMOTE_WORKSPACE=",
-  'mkdir -p "$REMOTE_WORKSPACE/projects"',
-  "ln -sfn /usr/local/bin/claude",
-  'printf "%s\\n" "Welcome to AgentFormation',
-  'cd "$REMOTE_WORKSPACE"',
-  "if ! command -v tmux",
-  "exec /bin/bash -l",
-  "tmux set-option",
-  "tmux set-window-option",
-  "tmux set-environment",
-  "if tmux has-session",
-  "exec tmux attach-session",
-  "exec tmux new-session",
-  "$TMUX_SESSION",
-  "$REMOTE_WORKSPACE",
-];
-export const DEFAULT_TABS: TerminalTab[] = [
+const DEFAULT_TABS: readonly TerminalTab[] = [
   {
     id: DEFAULT_TMUX_SESSION,
     label: "Code",
@@ -123,10 +62,8 @@ export const DEFAULT_TABS: TerminalTab[] = [
   },
 ];
 
-export function normalizeTmuxSessionName(sessionName: string) {
-  return TMUX_SESSION_PATTERN.test(sessionName)
-    ? sessionName
-    : DEFAULT_TMUX_SESSION;
+function createDefaultTabs(): TerminalTab[] {
+  return DEFAULT_TABS.map((tab) => ({ ...tab }));
 }
 
 export const QUICK_KEYS: { label: string; seq?: string; action?: "clear" }[] = [
@@ -176,75 +113,6 @@ export const terminalLinkHandler = {
   allowNonHttpProtocols: false,
 };
 
-export async function readJsonResponse<T>(response: Response): Promise<T> {
-  const body = (await response.json().catch(() => ({}))) as { error?: string };
-  if (!response.ok) {
-    throw new Error(
-      body.error ?? `Request failed with status ${response.status}`,
-    );
-  }
-
-  return body as T;
-}
-
-export function uploadFileToUrl(
-  file: File,
-  uploadUrl: string,
-  requiredHeaders: Record<string, string>,
-  onProgress: (progress: number) => void,
-) {
-  return new Promise<void>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", uploadUrl);
-    Object.entries(requiredHeaders).forEach(([name, value]) => {
-      xhr.setRequestHeader(name, value);
-    });
-    xhr.upload.onprogress = (event) => {
-      if (!event.lengthComputable) return;
-      onProgress(Math.round((event.loaded / event.total) * 100));
-    };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-        return;
-      }
-
-      reject(new Error(`Upload failed with status ${xhr.status}`));
-    };
-    xhr.onerror = () => reject(new Error("Upload failed"));
-    xhr.send(file);
-  });
-}
-
-export function getUploadStatusText(
-  uploadStatus: UploadStatus,
-  uploadError: string,
-) {
-  if (uploadError) return uploadError;
-  if (uploadStatus.state === "uploading") {
-    return `Uploading ${uploadStatus.filename} (${uploadStatus.progress}%)`;
-  }
-  if (uploadStatus.state === "completing") {
-    return `Installing ${uploadStatus.filename} on runtime...`;
-  }
-
-  return "";
-}
-
-export function getAttachmentPromptText(upload: UploadCompleteResponse) {
-  return `attached file: ${upload.path}`;
-}
-
-export function getAttachmentSubmitSuffix(
-  inputValue: string,
-  attachments: PendingAttachment[],
-) {
-  if (attachments.length === 0) return "";
-
-  const prefix = inputValue.length === 0 || /\s$/.test(inputValue) ? "" : " ";
-  return `${prefix}${attachments.map(getAttachmentPromptText).join(" ")} `;
-}
-
 export function getTerminalTheme(isDark: boolean) {
   return isDark
     ? {
@@ -287,20 +155,26 @@ export function isSubmitShortcut(event: ReactKeyboardEvent<HTMLInputElement>) {
   return event.metaKey || event.ctrlKey || event.getModifierState("Meta");
 }
 
-export function createTerminalTab(index: number): TerminalTab {
-  const tmuxSession =
-    index === 1 ? DEFAULT_TMUX_SESSION : `${DEFAULT_TMUX_SESSION}-${index}`;
+export function createFreshTerminalTab(labelIndex: number): TerminalTab {
+  const suffix = Array.from(
+    crypto.getRandomValues(new Uint8Array(12)),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+  const tmuxSession = `${DEFAULT_TMUX_SESSION}-${suffix}`;
 
   return {
     id: tmuxSession,
-    label: index === 1 ? "Code" : `Code ${index}`,
+    label: `Code ${labelIndex}`,
     tmuxSession,
   };
 }
 
-export function normalizeTerminalTabs(value: unknown): TerminalTab[] {
+export function normalizeTerminalTabs(
+  value: unknown,
+  limit = MAX_TERMINAL_TABS,
+): TerminalTab[] {
   if (!Array.isArray(value)) {
-    return DEFAULT_TABS;
+    return [];
   }
 
   const seenSessions = new Set<string>();
@@ -316,88 +190,95 @@ export function normalizeTerminalTabs(value: unknown): TerminalTab[] {
       return [];
     }
 
-    const tmuxSession = normalizeTmuxSessionName(tab.tmuxSession);
+    if (!TMUX_SESSION_PATTERN.test(tab.tmuxSession)) return [];
+    const tmuxSession = tab.tmuxSession;
     if (seenSessions.has(tmuxSession)) return [];
 
     seenSessions.add(tmuxSession);
     return [
       {
         id: tmuxSession,
-        label: tab.label.slice(0, 24) || tmuxSession,
+        label: tab.label.trim().slice(0, 24).trim() || tmuxSession,
         tmuxSession,
       },
     ];
   });
 
-  return tabs.length ? tabs : DEFAULT_TABS;
+  return tabs.slice(0, limit);
 }
 
-export function getNextTerminalTabIndex(tabs: TerminalTab[]) {
+export function getNextTerminalTabLabelIndex(tabs: TerminalTab[]) {
   return tabs.reduce((nextIndex, tab) => {
-    if (tab.tmuxSession === DEFAULT_TMUX_SESSION) {
+    if (tab.label === "Code") {
       return Math.max(nextIndex, 2);
     }
 
-    const match = tab.tmuxSession.match(/^code-(\d+)$/);
-    return match
-      ? Math.max(nextIndex, Number.parseInt(match[1], 10) + 1)
+    const match = tab.label.match(/^Code ([1-9][0-9]*)$/);
+    if (!match) return nextIndex;
+    const parsed = Number.parseInt(match[1], 10);
+    return Number.isSafeInteger(parsed) && parsed < Number.MAX_SAFE_INTEGER
+      ? Math.max(nextIndex, parsed + 1)
       : nextIndex;
   }, 2);
 }
 
-export interface StoredTerminalState {
+export interface InitialTerminalState {
   activeTabId: string;
   closedTabs: TerminalTab[];
   mountedTabIds: string[];
-  nextTabIndex: number;
+  nextTabLabelIndex: number;
   tabs: TerminalTab[];
+}
+
+export const TERMINAL_STORAGE_PREFIX = "mobile-terminal-tabs:";
+
+export function clearStoredTerminalStates(storage: Storage): void {
+  const terminalKeys: string[] = [];
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (key?.startsWith(TERMINAL_STORAGE_PREFIX)) terminalKeys.push(key);
+  }
+  for (const key of terminalKeys) storage.removeItem(key);
 }
 
 export function loadStoredTerminalState(
   storageKey: string,
-): StoredTerminalState {
+  storage: Pick<Storage, "getItem"> = window.localStorage,
+): InitialTerminalState {
   try {
-    const stored = window.localStorage.getItem(storageKey);
+    const stored = storage.getItem(storageKey);
     if (!stored) {
+      const tabs = createDefaultTabs();
       return {
-        activeTabId: DEFAULT_TABS[0].id,
+        activeTabId: tabs[0].id,
         closedTabs: [],
-        mountedTabIds: [DEFAULT_TABS[0].id],
-        nextTabIndex: 2,
-        tabs: DEFAULT_TABS,
+        mountedTabIds: [tabs[0].id],
+        nextTabLabelIndex: 2,
+        tabs,
       };
     }
 
     const parsed = JSON.parse(stored) as unknown;
-    const storedTabs = Array.isArray(parsed)
-      ? parsed
-      : parsed && typeof parsed === "object"
-        ? (parsed as Record<string, unknown>).tabs
+    const parsedRecord =
+      parsed && !Array.isArray(parsed) && typeof parsed === "object"
+        ? (parsed as Record<string, unknown>)
         : null;
-    const storedClosedTabs =
-      parsed && typeof parsed === "object"
-        ? (parsed as Record<string, unknown>).closedTabs
-        : null;
-    const tabs = normalizeTerminalTabs(storedTabs);
+    const storedTabs = Array.isArray(parsed) ? parsed : parsedRecord?.tabs;
+    const storedClosedTabs = parsedRecord?.closedTabs;
+    const normalizedTabs = normalizeTerminalTabs(storedTabs);
+    const tabs = normalizedTabs.length ? normalizedTabs : createDefaultTabs();
     const closedTabs = Array.isArray(storedClosedTabs)
-      ? normalizeTerminalTabs(storedClosedTabs)
+      ? normalizeTerminalTabs(storedClosedTabs, RECENT_CLOSED_TABS_LIMIT)
           .filter((tab) => !tabs.some((openTab) => openTab.id === tab.id))
           .slice(0, RECENT_CLOSED_TABS_LIMIT)
       : [];
-    const storedNextTabIndex =
-      parsed && typeof parsed === "object"
-        ? (parsed as Record<string, unknown>).nextTabIndex
-        : null;
-    const storedActiveTabId =
-      parsed && typeof parsed === "object"
-        ? (parsed as Record<string, unknown>).activeTabId
-        : null;
+    const storedActiveTabId = parsedRecord?.activeTabId;
     const activeTabId =
       typeof storedActiveTabId === "string" &&
       tabs.some((tab) => tab.id === storedActiveTabId)
         ? storedActiveTabId
         : tabs[0].id;
-    const minimumNextTabIndex = getNextTerminalTabIndex([
+    const nextTabLabelIndex = getNextTerminalTabLabelIndex([
       ...tabs,
       ...closedTabs,
     ]);
@@ -406,19 +287,17 @@ export function loadStoredTerminalState(
       activeTabId,
       closedTabs,
       mountedTabIds: [activeTabId],
-      nextTabIndex:
-        typeof storedNextTabIndex === "number" && storedNextTabIndex >= 2
-          ? Math.max(storedNextTabIndex, minimumNextTabIndex)
-          : minimumNextTabIndex,
+      nextTabLabelIndex,
       tabs,
     };
   } catch {
+    const tabs = createDefaultTabs();
     return {
-      activeTabId: DEFAULT_TABS[0].id,
+      activeTabId: tabs[0].id,
       closedTabs: [],
-      mountedTabIds: [DEFAULT_TABS[0].id],
-      nextTabIndex: 2,
-      tabs: DEFAULT_TABS,
+      mountedTabIds: [tabs[0].id],
+      nextTabLabelIndex: 2,
+      tabs,
     };
   }
 }
@@ -463,45 +342,6 @@ export function clampDpadPosition(position: DpadPosition) {
       ),
     ),
   };
-}
-
-export function terminateSession(sessionId: string, terminateToken: string) {
-  const body = JSON.stringify({ sessionId, terminateToken });
-  fetch("/api/session/terminate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body,
-    keepalive: true,
-    credentials: "same-origin",
-  }).catch(() => {
-    if (typeof navigator.sendBeacon === "function") {
-      navigator.sendBeacon(
-        "/api/session/terminate",
-        new Blob([body], { type: "application/json" }),
-      );
-    }
-  });
-}
-
-export async function readSessionResponse(res: Response): Promise<SessionInfo> {
-  const body = await res.json().catch(() => ({ error: "Unknown error" }));
-  if (!res.ok) {
-    throw new Error(
-      typeof body.error === "string" ? body.error : `HTTP ${res.status}`,
-    );
-  }
-
-  if (
-    typeof body.sessionId !== "string" ||
-    typeof body.streamUrl !== "string" ||
-    typeof body.tokenValue !== "string" ||
-    typeof body.terminateToken !== "string" ||
-    (body.bootstrapText !== undefined && typeof body.bootstrapText !== "string")
-  ) {
-    throw new Error("Incomplete SSM session response");
-  }
-
-  return body;
 }
 
 export function isTerminalAtBottom(
@@ -558,35 +398,12 @@ export function measureTerminalCellWidth(container: HTMLElement) {
 export function getTerminalColumnsForWidth(container: HTMLElement) {
   const cellWidth = measureTerminalCellWidth(container);
   return Math.max(
-    1,
+    TERMINAL_MIN_COLUMNS,
     Math.min(
       TERMINAL_MAX_COLUMNS,
       Math.floor(container.clientWidth / cellWidth),
     ),
   );
-}
-
-export function filterStartupProfileEchoes(text: string) {
-  return text
-    .split(/\r?\n/)
-    .filter(
-      (line) =>
-        !STARTUP_PROFILE_ECHO_MARKERS.some((marker) => line.includes(marker)),
-    )
-    .join("\n");
-}
-
-export function containsStartupProfileEcho(text: string) {
-  return STARTUP_PROFILE_ECHO_MARKERS.some((marker) => text.includes(marker));
-}
-
-export function normalizeBootstrapText(text: string) {
-  const normalized = filterStartupProfileEchoes(text)
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n");
-  if (!normalized) return "";
-
-  return `\x1b[0m${normalized.replace(/\n/g, "\r\n")}\r\n`;
 }
 
 export function getTerminalLineText(
@@ -596,6 +413,44 @@ export function getTerminalLineText(
   return (
     terminal.buffer.active.getLine(rowIndex)?.translateToString(true) ?? ""
   );
+}
+
+function getTerminalCellForStringIndex(
+  line: import("@xterm/xterm").IBufferLine,
+  stringIndex: number,
+): { column: number; width: number } | null {
+  if (!Number.isSafeInteger(stringIndex) || stringIndex < 0) return null;
+
+  let translatedIndex = 0;
+  for (let column = 0; column < line.length; column += 1) {
+    const cell = line.getCell(column);
+    if (!cell) continue;
+    const width = cell.getWidth();
+    if (width === 0) continue;
+    const characters = cell.getChars() || " ";
+    if (stringIndex < translatedIndex + characters.length) {
+      return { column, width };
+    }
+    translatedIndex += characters.length;
+  }
+
+  return null;
+}
+
+function getTerminalColumnsForStringRange(
+  line: import("@xterm/xterm").IBufferLine,
+  startStringIndex: number,
+  endStringIndex: number,
+): { startColumnIndex: number; endColumnIndex: number } | null {
+  if (endStringIndex <= startStringIndex) return null;
+  const startCell = getTerminalCellForStringIndex(line, startStringIndex);
+  const endCell = getTerminalCellForStringIndex(line, endStringIndex - 1);
+  if (!startCell || !endCell) return null;
+
+  return {
+    startColumnIndex: startCell.column,
+    endColumnIndex: endCell.column + endCell.width - 1,
+  };
 }
 
 export function getTerminalBufferPoint(
@@ -656,49 +511,59 @@ export function getTerminalSelectionRange(
 export function collectTerminalUrl(
   terminal: import("@xterm/xterm").Terminal,
   startRowIndex: number,
-  startColumnIndex: number,
+  startStringIndex: number,
   firstSegment: string,
 ) {
+  const startLine = terminal.buffer.active.getLine(startRowIndex);
+  if (!startLine) return null;
+  const firstRange = getTerminalColumnsForStringRange(
+    startLine,
+    startStringIndex,
+    startStringIndex + firstSegment.length,
+  );
+  if (!firstRange) return null;
+
   let text = firstSegment;
   let endRowIndex = startRowIndex;
-  let endColumnIndex = startColumnIndex + firstSegment.length - 1;
+  let endColumnIndex = firstRange.endColumnIndex;
   let currentRowIndex = startRowIndex;
-  let currentSegmentStartColumnIndex = startColumnIndex;
   let currentSegment = firstSegment;
+  let continuationLines = 0;
 
   while (
     currentSegment.length > 0 &&
+    continuationLines < WEB_LINK_MAX_CONTINUATION_LINES &&
     currentRowIndex + 1 < terminal.buffer.active.length
   ) {
-    const currentLineText = getTerminalLineText(terminal, currentRowIndex);
-    const currentSegmentTouchesLineEnd =
-      currentSegmentStartColumnIndex + currentSegment.length >=
-      currentLineText.length;
+    const nextLine = terminal.buffer.active.getLine(currentRowIndex + 1);
+    if (!nextLine?.isWrapped) break;
+    const nextLineText = nextLine.translateToString(true);
+    const continuation = nextLineText.match(WEB_LINK_CONTINUATION_REGEX)?.[1];
+    const continuationRange = continuation
+      ? getTerminalColumnsForStringRange(nextLine, 0, continuation.length)
+      : null;
 
-    if (!currentSegmentTouchesLineEnd) break;
-
-    const nextLineText = getTerminalLineText(terminal, currentRowIndex + 1);
-    const leadingWhitespaceLength =
-      nextLineText.length - nextLineText.trimStart().length;
-    const continuation = nextLineText
-      .slice(leadingWhitespaceLength)
-      .match(WEB_LINK_CONTINUATION_REGEX)?.[1];
-
-    if (!continuation) break;
+    if (
+      !continuation ||
+      !continuationRange ||
+      text.length + continuation.length > WEB_LINK_MAX_CHARACTERS
+    ) {
+      break;
+    }
 
     text += continuation;
+    continuationLines += 1;
     currentRowIndex += 1;
-    currentSegmentStartColumnIndex = leadingWhitespaceLength;
     currentSegment = continuation;
     endRowIndex = currentRowIndex;
-    endColumnIndex = leadingWhitespaceLength + continuation.length - 1;
+    endColumnIndex = continuationRange.endColumnIndex;
   }
 
   return {
     text,
     range: {
       start: {
-        x: startColumnIndex + 1,
+        x: firstRange.startColumnIndex + 1,
         y: startRowIndex + 1,
       },
       end: {
@@ -707,6 +572,45 @@ export function collectTerminalUrl(
       },
     },
   };
+}
+
+function getTerminalUrlCandidates(
+  terminal: import("@xterm/xterm").Terminal,
+  targetRowIndex: number,
+) {
+  const candidates: NonNullable<ReturnType<typeof collectTerminalUrl>>[] = [];
+  const startRowIndex = Math.max(
+    0,
+    targetRowIndex - WEB_LINK_MAX_CONTINUATION_LINES,
+  );
+
+  for (
+    let rowIndex = startRowIndex;
+    rowIndex <= targetRowIndex;
+    rowIndex += 1
+  ) {
+    const line = terminal.buffer.active.getLine(rowIndex);
+    if (!line) continue;
+    const lineText = line.translateToString(true);
+    const linkPattern = new RegExp(
+      WEB_LINK_START_REGEX.source,
+      WEB_LINK_START_REGEX.flags,
+    );
+
+    for (const match of lineText.matchAll(linkPattern)) {
+      const candidate = collectTerminalUrl(
+        terminal,
+        rowIndex,
+        match.index ?? 0,
+        match[0],
+      );
+      if (!candidate) continue;
+      const text = normalizeTerminalUrlText(candidate.text);
+      if (text) candidates.push({ ...candidate, text });
+    }
+  }
+
+  return candidates;
 }
 
 export function terminalRangeContainsPoint(
@@ -739,29 +643,9 @@ export function getTerminalUrlAtPoint(
   const bufferRowIndex = point.row;
   const rowNumber = bufferRowIndex + 1;
 
-  const startRowIndex = Math.max(0, bufferRowIndex - WEB_LINK_CONTEXT_LINES);
-  const endRowIndex = Math.min(
-    terminal.buffer.active.length - 1,
-    bufferRowIndex + WEB_LINK_CONTEXT_LINES,
-  );
-
-  for (let rowIndex = startRowIndex; rowIndex <= endRowIndex; rowIndex += 1) {
-    const lineText = getTerminalLineText(terminal, rowIndex);
-    WEB_LINK_START_REGEX.lastIndex = 0;
-
-    for (const match of lineText.matchAll(WEB_LINK_START_REGEX)) {
-      const candidate = collectTerminalUrl(
-        terminal,
-        rowIndex,
-        match.index ?? 0,
-        match[0],
-      );
-
-      if (
-        terminalRangeContainsPoint(candidate.range, rowNumber, columnNumber)
-      ) {
-        return candidate.text;
-      }
+  for (const candidate of getTerminalUrlCandidates(terminal, bufferRowIndex)) {
+    if (terminalRangeContainsPoint(candidate.range, rowNumber, columnNumber)) {
+      return candidate.text;
     }
   }
 
@@ -773,48 +657,22 @@ export function createWrappedUrlLinkProvider(
 ): import("@xterm/xterm").ILinkProvider {
   return {
     provideLinks(bufferLineNumber, callback) {
-      const buffer = terminal.buffer.active;
       const targetRowIndex = bufferLineNumber - 1;
-      const startRowIndex = Math.max(
-        0,
-        targetRowIndex - WEB_LINK_CONTEXT_LINES,
-      );
-      const endRowIndex = Math.min(
-        buffer.length - 1,
-        targetRowIndex + WEB_LINK_CONTEXT_LINES,
-      );
       const links: import("@xterm/xterm").ILink[] = [];
 
-      for (
-        let rowIndex = startRowIndex;
-        rowIndex <= endRowIndex;
-        rowIndex += 1
-      ) {
-        const lineText = getTerminalLineText(terminal, rowIndex);
-        WEB_LINK_START_REGEX.lastIndex = 0;
-
-        for (const match of lineText.matchAll(WEB_LINK_START_REGEX)) {
-          const matchIndex = match.index ?? 0;
-          const candidate = collectTerminalUrl(
-            terminal,
-            rowIndex,
-            matchIndex,
-            match[0],
-          );
-
-          if (
-            candidate.range.start.y <= bufferLineNumber &&
-            candidate.range.end.y >= bufferLineNumber
-          ) {
-            const text = normalizeTerminalUrlText(candidate.text);
-            if (!text) continue;
-
-            links.push({
-              range: candidate.range,
-              text,
-              activate: openTerminalLink,
-            });
-          }
+      for (const candidate of getTerminalUrlCandidates(
+        terminal,
+        targetRowIndex,
+      )) {
+        if (
+          candidate.range.start.y <= bufferLineNumber &&
+          candidate.range.end.y >= bufferLineNumber
+        ) {
+          links.push({
+            range: candidate.range,
+            text: candidate.text,
+            activate: openTerminalLink,
+          });
         }
       }
 

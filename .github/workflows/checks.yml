@@ -45,15 +45,21 @@ jobs:
       - run: bun run test
       - run: bun run build
         env:
+          AGENTFORMATION_DEPLOYMENT: agentformation
+          AUTH_URL: https://localhost
           AUTH_COGNITO_ID: build-client
           AUTH_COGNITO_SECRET: build-secret
           AUTH_COGNITO_IDENTITY_PROVIDER: IdentityCenter
           AUTH_COGNITO_ISSUER: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_build
           AUTH_SECRET: build-only-secret-with-at-least-32-characters
           AWS_REGION: us-east-1
+          CONTROL_TABLE: build-control
+          PROVISIONING_STATE_MACHINE_ARN: arn:aws:states:us-east-1:000000000000:stateMachine:build-only
           USER_REGISTRY_TABLE: build-users
           UPLOAD_BUCKET: build-uploads
           SESSION_DOCUMENT_NAME: build-terminal
+          UPLOAD_DELIVERY_DOCUMENT_NAME: build-upload-delivery
+          OAUTH_RELAY_DOCUMENT_NAME: build-oauth-relay
       - name: Build and smoke-test the production container
         run: |
           docker build --tag agentformation-web:test .
@@ -61,7 +67,8 @@ jobs:
             --name agentformation-web-test \
             --publish 127.0.0.1:3000:3000 \
             --env HOSTNAME=container-internal \
-            --env AUTH_URL=http://localhost:3000 \
+            --env AGENTFORMATION_DEPLOYMENT=agentformation \
+            --env AUTH_URL=https://localhost \
             --env AUTH_TRUST_HOST=true \
             --env AUTH_COGNITO_ID=container-client \
             --env AUTH_COGNITO_SECRET=container-secret \
@@ -69,14 +76,19 @@ jobs:
             --env AUTH_COGNITO_ISSUER=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_container \
             --env AUTH_SECRET=container-only-secret-with-at-least-32-characters \
             --env AWS_REGION=us-east-1 \
+            --env CONTROL_TABLE=container-control \
+            --env PROVISIONING_STATE_MACHINE_ARN=arn:aws:states:us-east-1:000000000000:stateMachine:container-only \
             --env USER_REGISTRY_TABLE=container-users \
             --env UPLOAD_BUCKET=container-uploads \
             --env SESSION_DOCUMENT_NAME=container-terminal \
+            --env UPLOAD_DELIVERY_DOCUMENT_NAME=container-upload-delivery \
+            --env OAUTH_RELAY_DOCUMENT_NAME=container-oauth-relay \
             agentformation-web:test
           trap 'docker stop agentformation-web-test >/dev/null 2>&1 || true' EXIT
           for _ in {1..30}; do
             if curl --fail --silent --show-error http://127.0.0.1:3000/api/health | grep -F '"status":"ok"' && \
-              curl --fail --silent --show-error http://127.0.0.1:3000/ | grep -F AgentFormation; then
+              curl --fail --silent --show-error http://127.0.0.1:3000/ | grep -F AgentFormation && \
+              docker exec agentformation-web-test id -u | grep -Fx 1001; then
               exit 0
             fi
             sleep 2

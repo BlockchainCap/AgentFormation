@@ -4,37 +4,50 @@ Description: AgentFormation App Runner web terminal and least-privilege service 
 Parameters:
   DeploymentName:
     Type: String
-    AllowedPattern: "^[a-z][a-z0-9-]{2,31}$"
+    AllowedPattern: "^(?!.*-runtime-)[a-z][a-z0-9-]{2,31}$"
   ImageIdentifier:
     Type: String
-    MinLength: 1
+    AllowedPattern: "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com(?:\\.cn)?/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$"
   PublicUrl:
     Type: String
-    AllowedPattern: "^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$"
+    AllowedPattern: "^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$"
   UserPoolClientId:
     Type: String
-    MinLength: 1
-  CognitoIssuer:
+    AllowedPattern: "^[A-Za-z0-9]+$"
+  UserPoolId:
     Type: String
-    AllowedPattern: "^https://[^ ]+$"
+    AllowedPattern: "^[A-Za-z0-9-]+_[A-Za-z0-9]+$"
   CognitoClientSecretArn:
     Type: String
-    MinLength: 1
+    AllowedPattern: "^arn:[A-Za-z0-9-]+:secretsmanager:[A-Za-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$"
   AuthSecretArn:
     Type: String
-    MinLength: 1
+    AllowedPattern: "^arn:[A-Za-z0-9-]+:secretsmanager:[A-Za-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$"
   UserRegistryTableName:
     Type: String
-    MinLength: 1
-  UploadBucketName:
+    MinLength: 3
+    MaxLength: 255
+    AllowedPattern: "^[A-Za-z0-9_.-]+$"
+  ControlTableName:
     Type: String
     MinLength: 3
+    MaxLength: 255
+    AllowedPattern: "^[A-Za-z0-9_.-]+$"
+  UploadBucketName:
+    Type: String
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
   TerminalSessionDocumentName:
     Type: String
-    MinLength: 1
+    AllowedPattern: "^[A-Za-z0-9_.-]{3,128}$"
+  UploadDeliveryDocumentName:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9_.-]{3,128}$"
+  OAuthRelayDocumentName:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9_.-]{3,128}$"
   ProvisioningStateMachineArn:
     Type: String
-    MinLength: 20
+    AllowedPattern: "^arn:[A-Za-z0-9-]+:states:[A-Za-z0-9-]+:[0-9]{12}:stateMachine:[A-Za-z0-9_+=.@-]+$"
 
 Resources:
   EcrAccessRole:
@@ -47,7 +60,7 @@ Resources:
             Principal: { Service: build.apprunner.amazonaws.com }
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess"
       Tags:
         - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
 
@@ -75,6 +88,17 @@ Resources:
               - Effect: Allow
                 Action: states:StartExecution
                 Resource: !Ref ProvisioningStateMachineArn
+        - PolicyName: EnforceSharedRequestLimits
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:DeleteItem
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ControlTableName}"
         - PolicyName: ReadRuntimeProvisioningProgress
           PolicyDocument:
             Version: "2012-10-17"
@@ -93,6 +117,8 @@ Resources:
                 Condition:
                   StringEquals:
                     "ssm:resourceTag/AgentFormationDeployment": !Ref DeploymentName
+                  Bool:
+                    "ssm:SessionDocumentAccessCheck": true
               - Sid: UseTerminalDocument
                 Effect: Allow
                 Action: ssm:StartSession
@@ -104,13 +130,15 @@ Resources:
                 Condition:
                   StringEquals:
                     "ssm:resourceTag/AgentFormationDeployment": !Ref DeploymentName
-              - Sid: UseUploadCommandDocument
+              - Sid: UseBoundedRuntimeCommandDocuments
                 Effect: Allow
                 Action: ssm:SendCommand
-                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/${UploadDeliveryDocumentName}"
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/${OAuthRelayDocumentName}"
               - Sid: ObserveUploadCommands
                 Effect: Allow
-                Action: ssm:GetCommandInvocation
+                Action: [ssm:GetCommandInvocation, ssm:CancelCommand]
                 Resource: "*"
               - Sid: ResumeAndEndBrowserSessionsInThisAccount
                 Effect: Allow
@@ -167,9 +195,13 @@ Resources:
               - { Name: AWS_REGION, Value: !Ref AWS::Region }
               - { Name: AGENTFORMATION_DEPLOYMENT, Value: !Ref DeploymentName }
               - { Name: AUTH_COGNITO_ID, Value: !Ref UserPoolClientId }
-              - { Name: AUTH_COGNITO_ISSUER, Value: !Ref CognitoIssuer }
+              - {
+                  Name: AUTH_COGNITO_ISSUER,
+                  Value: !Sub "https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${UserPoolId}",
+                }
               - { Name: AUTH_COGNITO_IDENTITY_PROVIDER, Value: IdentityCenter }
               - { Name: USER_REGISTRY_TABLE, Value: !Ref UserRegistryTableName }
+              - { Name: CONTROL_TABLE, Value: !Ref ControlTableName }
               - {
                   Name: PROVISIONING_STATE_MACHINE_ARN,
                   Value: !Ref ProvisioningStateMachineArn,
@@ -178,6 +210,14 @@ Resources:
               - {
                   Name: SESSION_DOCUMENT_NAME,
                   Value: !Ref TerminalSessionDocumentName,
+                }
+              - {
+                  Name: UPLOAD_DELIVERY_DOCUMENT_NAME,
+                  Value: !Ref UploadDeliveryDocumentName,
+                }
+              - {
+                  Name: OAUTH_RELAY_DOCUMENT_NAME,
+                  Value: !Ref OAuthRelayDocumentName,
                 }
             RuntimeEnvironmentSecrets:
               - {

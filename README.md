@@ -2,14 +2,14 @@
 
 # AgentFormation
 
-**Spin up private, persistent EC2 workspaces for coding agents in your own AWS account.**
+**Spin up private, persistent EC2 workspaces for coding agents in your AWS org**
 
 <p>
   <a href="LICENSE"><img alt="License: BSD 2-Clause" src="https://img.shields.io/badge/license-BSD%202--Clause-3f3f46?style=flat-square"></a>
   <a href="SECURITY.md"><img alt="Security policy" src="https://img.shields.io/badge/security-policy-2f855a?style=flat-square"></a>
 </p>
 
-<p>Run Codex and Claude Code from a browser while the workspace stays on a private EC2 runtime—with no public IP and no inbound SSH.</p>
+<p>Run CLI agent harnesses from a browser while the workspace stays on a private EC2 runtime with no public IP and no inbound SSH.</p>
 
 <p><a href="#quick-start">Quick start</a> · <a href="#architecture">Architecture</a> · <a href="#documentation">Documentation</a> · <a href="#security-model">Security</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
@@ -72,6 +72,7 @@ AWS IAM Identity Center --SAML--> Cognito bridge --OIDC--> App Runner
 - an App Runner web terminal
 - a restricted Step Functions job that can create only the fixed runtime stack
 - a DynamoDB identity-to-runtime registry
+- a short-lived DynamoDB request-control table shared by every web instance
 - a short-lived, encrypted S3 upload staging area
 
 You need an organization instance of IAM Identity Center, permission to add a
@@ -279,3 +280,5 @@ or uptime commitment. Bugs and improvements are welcome through GitHub issues an
 pull requests.
 
 Licensed under the [BSD 2-Clause License](LICENSE).
+
+_AgentFormation is still experimental—review the security model and try it in a non-production AWS account before depending on it._

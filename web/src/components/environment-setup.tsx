@@ -24,6 +24,12 @@ interface EnvironmentSetupProps {
   initialStartedAt?: string;
 }
 
+const STATUS_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_CONSECUTIVE_STATUS_FAILURES = 5;
+const MIN_STATUS_POLL_DELAY_MS = 3_000;
+const MAX_STATUS_POLL_DELAY_MS = 15_000;
+const MISSING_ENVIRONMENT_GRACE_MS = 60_000;
+
 function formatElapsed(totalSeconds: number): string {
   if (totalSeconds < 60) return `${totalSeconds}s`;
   const minutes = Math.floor(totalSeconds / 60);
@@ -43,6 +49,7 @@ export function EnvironmentSetup({
   );
   const [error, setError] = useState<string>();
   const [pollWarning, setPollWarning] = useState<string>();
+  const [pollingStopped, setPollingStopped] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
@@ -64,9 +71,26 @@ export function EnvironmentSetup({
 
     let cancelled = false;
     let nextPoll: number | undefined;
+    let consecutiveFailures = 0;
+    const pollingStartedAt = Date.now();
+
+    function scheduleNext(delayMs: number) {
+      if (!cancelled) {
+        nextPoll = window.setTimeout(refreshProgress, delayMs);
+      }
+    }
+
     async function refreshProgress() {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(
+        () => controller.abort(),
+        STATUS_REQUEST_TIMEOUT_MS,
+      );
       try {
-        const response = await fetch("/api/environment", { cache: "no-store" });
+        const response = await fetch("/api/environment", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
         const parsed = environmentResponseSchema.safeParse(
           await response.json().catch(() => null),
         );
@@ -74,7 +98,9 @@ export function EnvironmentSetup({
           throw new Error("Status check failed");
         }
         if (cancelled) return;
+        consecutiveFailures = 0;
         setPollWarning(undefined);
+        setPollingStopped(false);
 
         if (parsed.data.status === "active") {
           window.location.replace("/");
@@ -84,19 +110,43 @@ export function EnvironmentSetup({
           setStatus("failed");
           return;
         }
+        if (parsed.data.status === "disabled") {
+          window.location.replace("/auth-error?error=AccessDenied");
+          return;
+        }
+        if (
+          parsed.data.status === "not_created" &&
+          Date.now() - pollingStartedAt >= MISSING_ENVIRONMENT_GRACE_MS
+        ) {
+          setStatus("failed");
+          return;
+        }
         if (parsed.data.status === "provisioning" && parsed.data.progress) {
           setProgress(parsed.data.progress);
         }
+
+        scheduleNext(MIN_STATUS_POLL_DELAY_MS);
       } catch {
         if (!cancelled) {
-          setPollWarning(
-            "The latest status check was missed. Retrying automatically…",
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= MAX_CONSECUTIVE_STATUS_FAILURES) {
+            setPollingStopped(true);
+            setPollWarning(
+              "We could not confirm the latest AWS status. Check again when your connection is stable.",
+            );
+            return;
+          }
+
+          setPollWarning("The latest status check was missed. Retrying…");
+          scheduleNext(
+            Math.min(
+              MAX_STATUS_POLL_DELAY_MS,
+              MIN_STATUS_POLL_DELAY_MS * 2 ** (consecutiveFailures - 1),
+            ),
           );
         }
-      }
-
-      if (!cancelled) {
-        nextPoll = window.setTimeout(refreshProgress, 3_000);
+      } finally {
+        window.clearTimeout(timeout);
       }
     }
 
@@ -110,6 +160,7 @@ export function EnvironmentSetup({
   async function createEnvironment() {
     setSubmitting(true);
     setError(undefined);
+    setPollWarning(undefined);
     try {
       const response = await fetch("/api/environment", {
         method: "POST",
@@ -133,6 +184,7 @@ export function EnvironmentSetup({
           progressForStage("confirming_access", new Date().toISOString()),
       );
       setElapsedSeconds(0);
+      setPollingStopped(false);
       setStatus("provisioning");
     } catch (requestError) {
       setError(
@@ -267,16 +319,20 @@ export function EnvironmentSetup({
           type="button"
           size="lg"
           className="w-full gap-2"
-          disabled={isProvisioning || submitting}
-          onClick={createEnvironment}
+          disabled={(isProvisioning && !pollingStopped) || submitting}
+          onClick={
+            pollingStopped ? () => window.location.reload() : createEnvironment
+          }
         >
-          {isProvisioning || submitting ? (
+          {(isProvisioning && !pollingStopped) || submitting ? (
             <LoaderCircle className="size-4 animate-spin" />
           ) : (
             <ServerCog className="size-4" />
           )}
           {isProvisioning
-            ? (currentStep?.label ?? "Environment is being created")
+            ? pollingStopped
+              ? "Check status"
+              : (currentStep?.label ?? "Environment is being created")
             : status === "failed"
               ? "Try again"
               : "Create environment"}

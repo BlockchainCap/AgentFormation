@@ -76,8 +76,8 @@ account and complete this checklist.
 - Review findings in the account or organization IAM Access Analyzer. AgentFormation
   intentionally does not create this account-wide service; if no analyzer exists,
   record that operator gap instead of marking the review complete.
-- Confirm the ECR scan for the exact web image tag completed, then review every
-  reported finding before release.
+- Confirm the ECR scan for the exact web image digest deployed to App Runner
+  completed, then review every reported finding before release.
 - Run `./agentformation destroy --confirm DELETE` after the review window and
   verify no tagged EC2, EBS, NAT, App Runner, ECR, S3, DynamoDB, Cognito, Secrets
   Manager, Step Functions, Image Builder, AMI, or snapshot resources remain.

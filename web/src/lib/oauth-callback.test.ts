@@ -37,7 +37,22 @@ describe("validateOAuthCallbackUrl", () => {
     "http://localhost:46158/callback/valid.token?code=x",
     "http://localhost:46158/callback",
     "http://localhost:46158/callback?code=x#fragment",
+    "http://localhost:46158/callback?code=x\nurl=http://example.com",
+    "http://2130706433:46158/callback?code=x",
+    "http://0x7f.0.0.1:46158/callback?code=x",
+    "http://evil.com\\@127.0.0.1:46158/callback?code=x",
   ])("rejects unsafe callback %s", (callbackUrl) => {
     expect(() => validateOAuthCallbackUrl(callbackUrl)).toThrow(ApiError);
   });
+
+  it.each(["\r", "\n", "\0", "\u001f", "\u007f"])(
+    "rejects callback control character %j",
+    (controlCharacter) => {
+      expect(() =>
+        validateOAuthCallbackUrl(
+          `http://localhost:46158/callback?code=x${controlCharacter}ignored`,
+        ),
+      ).toThrow(ApiError);
+    },
+  );
 });

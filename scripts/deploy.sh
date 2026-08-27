@@ -14,22 +14,23 @@ DEPLOYMENT="$(deployment_name)"
 ACCOUNT_ID="$(aws_cli sts get-caller-identity --query Account --output text)"
 CALLER_ARN="$(aws_cli sts get-caller-identity --query Arn --output text)"
 AWS_PARTITION="$(cut -d: -f2 <<<"$CALLER_ARN")"
-if [[ "$AWS_PARTITION" == "aws-cn" ]]; then
-  AWS_URL_SUFFIX="amazonaws.com.cn"
-else
-  AWS_URL_SUFFIX="amazonaws.com"
-fi
 DOMAIN_SUFFIX="$(hash_text "$ACCOUNT_ID:$DEPLOYMENT" | cut -c1-10)"
 DOMAIN_PREFIX="$DEPLOYMENT-$DOMAIN_SUFFIX"
 IDENTITY_CENTER_METADATA_URL="$(config '.identityCenter.metadataUrl // ""')"
 IDENTITY_CENTER_METADATA_FILE="$(config '.identityCenter.metadataFile // ""')"
 CONFIGURED_PUBLIC_URL="$(config '(.publicUrl // "") | rtrimstr("/")')"
+
+if [[ -n "$CONFIGURED_PUBLIC_URL" ]]; then
+  require_https_origin "publicUrl" "$CONFIGURED_PUBLIC_URL"
+fi
 if [[ -n "$IDENTITY_CENTER_METADATA_FILE" && "$IDENTITY_CENTER_METADATA_FILE" != /* ]]; then
   IDENTITY_CENTER_METADATA_FILE="$ROOT_DIR/$IDENTITY_CENTER_METADATA_FILE"
 fi
 
 CONFIGURE_CASE_INSENSITIVE_USERNAMES=true
-if aws_cli cloudformation describe-stacks --stack-name "$(foundation_stack)" >/dev/null 2>&1; then
+FOUNDATION_EXISTS=false
+if stack_exists "$(foundation_stack)"; then
+  FOUNDATION_EXISTS=true
   EXISTING_USER_POOL_ID="$(stack_output "$(foundation_stack)" UserPoolId)"
   EXISTING_USERNAME_CASE_SENSITIVE="$(aws_cli cognito-idp describe-user-pool \
     --user-pool-id "$EXISTING_USER_POOL_ID" \
@@ -47,7 +48,10 @@ if aws_cli cloudformation describe-stacks --stack-name "$(foundation_stack)" >/d
     *)
       fail "Could not determine the existing Cognito username case-sensitivity setting"
       ;;
-  esac
+    esac
+else
+  stack_status=$?
+  [[ "$stack_status" -eq 1 ]] || exit "$stack_status"
 fi
 
 print_identity_center_setup() {
@@ -59,7 +63,8 @@ print_identity_center_setup() {
   acs_url="$(jq -r '[.[] | select(.OutputKey == "CognitoSamlAcsUrl") | .OutputValue][0] // ""' <<<"$outputs")"
   audience="$(jq -r '[.[] | select(.OutputKey == "CognitoSamlAudience") | .OutputValue][0] // ""' <<<"$outputs")"
   if [[ ! "$acs_url" =~ ^https:// ]] || [[ "$audience" != urn:amazon:cognito:sp:* ]]; then
-    user_pool_id="$(jq -er '[.[] | select(.OutputKey == "UserPoolId") | .OutputValue][0]' <<<"$outputs")"
+    user_pool_id="$(jq -r '[.[] | select(.OutputKey == "UserPoolId") | .OutputValue][0] // ""' <<<"$outputs")"
+    [[ -n "$user_pool_id" ]] || fail "The foundation stack did not return the Cognito user pool ID"
     if [[ "$AWS_PARTITION" == "aws-cn" ]]; then
       cognito_domain_suffix="amazoncognito.com.cn"
     else
@@ -72,8 +77,7 @@ print_identity_center_setup() {
   say "SAML audience: $audience"
 }
 
-if [[ -z "$IDENTITY_CENTER_METADATA_URL" && -z "$IDENTITY_CENTER_METADATA_FILE" ]] && \
-  aws_cli cloudformation describe-stacks --stack-name "$(foundation_stack)" >/dev/null 2>&1; then
+if [[ -z "$IDENTITY_CENTER_METADATA_URL" && -z "$IDENTITY_CENTER_METADATA_FILE" && "$FOUNDATION_EXISTS" == "true" ]]; then
   say "Identity Center setup is required before this existing deployment can be updated"
   print_identity_center_setup
   fail "Assign an IAM Identity Center group to a custom SAML application, then set identityCenter.metadataUrl (preferred) or identityCenter.metadataFile"
@@ -83,10 +87,38 @@ deploy_stack "$(network_stack)" templates/network.yaml \
   DeploymentName="$DEPLOYMENT" \
   NetworkMode="$(config '.networkMode')"
 
-deploy_stack "$(foundation_stack)" templates/foundation.yaml \
-  DeploymentName="$DEPLOYMENT" \
-  CognitoDomainPrefix="$DOMAIN_PREFIX" \
-  ConfigureCaseInsensitiveUsernames="$CONFIGURE_CASE_INSENSITIVE_USERNAMES"
+INITIAL_PUBLIC_URL="$CONFIGURED_PUBLIC_URL"
+if [[ -z "$INITIAL_PUBLIC_URL" ]]; then
+  if stack_exists "$(web_stack)"; then
+    INITIAL_PUBLIC_URL="$(stack_output "$(web_stack)" ServiceUrl)"
+    require_https_origin "The existing web service URL" "$INITIAL_PUBLIC_URL"
+  else
+    stack_status=$?
+    [[ "$stack_status" -eq 1 ]] || exit "$stack_status"
+    # A localhost callback exists only long enough to bootstrap a genuinely new
+    # deployment. Read failures on an existing web stack must stop the deploy.
+    INITIAL_PUBLIC_URL="https://localhost"
+  fi
+fi
+
+deploy_foundation_stack() {
+  local configure_identity_center="$1"
+  local public_url="$2"
+  deploy_stack "$(foundation_stack)" templates/foundation.yaml \
+    DeploymentName="$DEPLOYMENT" \
+    CognitoDomainPrefix="$DOMAIN_PREFIX" \
+    ConfigureCaseInsensitiveUsernames="$CONFIGURE_CASE_INSENSITIVE_USERNAMES" \
+    ConfigureIdentityCenterClient="$configure_identity_center" \
+    InitialCallbackUrl="$public_url/api/auth/callback/cognito" \
+    InitialLogoutUrl="$public_url/" \
+    UploadAllowedOrigin="$public_url"
+}
+
+if [[ "$FOUNDATION_EXISTS" == "false" ]]; then
+  # The user pool must exist before IAM Identity Center can be configured. The
+  # bootstrap stack has no app client, so local Cognito login is never exposed.
+  deploy_foundation_stack false "$INITIAL_PUBLIC_URL"
+fi
 
 if [[ -z "$IDENTITY_CENTER_METADATA_URL" && -z "$IDENTITY_CENTER_METADATA_FILE" ]]; then
   say "The identity bootstrap is ready"
@@ -96,41 +128,6 @@ if [[ -z "$IDENTITY_CENTER_METADATA_URL" && -z "$IDENTITY_CENTER_METADATA_FILE" 
 fi
 
 USER_POOL_ID="$(stack_output "$(foundation_stack)" UserPoolId)"
-CLIENT_ID="$(stack_output "$(foundation_stack)" UserPoolClientId)"
-CLIENT_SECRET_ARN="$(stack_output "$(foundation_stack)" CognitoClientSecretArn)"
-
-configure_cognito_client() {
-  local callback_urls_json="$1"
-  local logout_urls_json="$2"
-  local url
-  local -a callback_urls=()
-  local -a logout_urls=()
-  while IFS= read -r url; do
-    [[ -n "$url" ]] && callback_urls+=("$url")
-  done < <(jq -r '.[]' <<<"$callback_urls_json")
-  while IFS= read -r url; do
-    [[ -n "$url" ]] && logout_urls+=("$url")
-  done < <(jq -r '.[]' <<<"$logout_urls_json")
-  [[ "${#callback_urls[@]}" -gt 0 && "${#logout_urls[@]}" -gt 0 ]] || \
-    fail "Cognito callback and logout URLs cannot be empty"
-
-  aws_cli cognito-idp update-user-pool-client \
-    --user-pool-id "$USER_POOL_ID" \
-    --client-id "$CLIENT_ID" \
-    --supported-identity-providers IdentityCenter \
-    --explicit-auth-flows ALLOW_REFRESH_TOKEN_AUTH \
-    --allowed-o-auth-flows code \
-    --allowed-o-auth-scopes openid email profile \
-    --allowed-o-auth-flows-user-pool-client \
-    --callback-urls "${callback_urls[@]}" \
-    --logout-urls "${logout_urls[@]}" \
-    --prevent-user-existence-errors ENABLED \
-    --enable-token-revocation \
-    --access-token-validity 60 \
-    --id-token-validity 60 \
-    --refresh-token-validity 1 \
-    --token-validity-units AccessToken=minutes,IdToken=minutes,RefreshToken=days >/dev/null
-}
 
 say "Connecting the Cognito bridge to IAM Identity Center"
 if [[ -n "$IDENTITY_CENTER_METADATA_URL" ]]; then
@@ -161,14 +158,16 @@ else
     --idp-identifiers identity-center >/dev/null
 fi
 
-CURRENT_CLIENT_URLS="$(aws_cli cognito-idp describe-user-pool-client \
-  --user-pool-id "$USER_POOL_ID" \
-  --client-id "$CLIENT_ID" \
-  --query 'UserPoolClient.{callbacks:CallbackURLs,logouts:LogoutURLs}' \
-  --output json)"
-configure_cognito_client \
-  "$(jq -c '.callbacks' <<<"$CURRENT_CLIENT_URLS")" \
-  "$(jq -c '.logouts' <<<"$CURRENT_CLIENT_URLS")"
+deploy_foundation_stack true "$INITIAL_PUBLIC_URL"
+CLIENT_ID="$(stack_output "$(foundation_stack)" UserPoolClientId)"
+CLIENT_SECRET_ARN="$(stack_output "$(foundation_stack)" CognitoClientSecretArn)"
+AUTH_SECRET_ARN="$(stack_output "$(foundation_stack)" AuthSecretArn)"
+USER_REGISTRY_TABLE_NAME="$(stack_output "$(foundation_stack)" UserRegistryTableName)"
+CONTROL_TABLE_NAME="$(stack_output "$(foundation_stack)" ControlTableName)"
+UPLOAD_BUCKET="$(stack_output "$(foundation_stack)" UploadBucketName)"
+TERMINAL_SESSION_DOCUMENT_NAME="$(stack_output "$(foundation_stack)" TerminalSessionDocumentName)"
+UPLOAD_DELIVERY_DOCUMENT_NAME="$(stack_output "$(foundation_stack)" UploadDeliveryDocumentName)"
+OAUTH_RELAY_DOCUMENT_NAME="$(stack_output "$(foundation_stack)" OAuthRelayDocumentName)"
 
 say "Storing the generated Cognito client secret without printing it"
 aws_cli cognito-idp describe-user-pool-client \
@@ -244,26 +243,80 @@ else
   say "Reusing the latest tested AMI from the current image pipeline"
 fi
 
-AMI_ID="$(aws_cli imagebuilder get-image \
-    --image-build-version-arn "$IMAGE_ARN" \
-    --query 'image.outputResources.amis[0].image' \
-    --output text)"
-[[ "$AMI_ID" =~ ^ami-[0-9a-f]+$ ]] || fail "Image Builder did not return an AMI ID"
+BUILT_IMAGE="$(aws_cli imagebuilder get-image \
+  --image-build-version-arn "$IMAGE_ARN" \
+  --output json)"
+jq -e --arg region "$(region)" --arg account "$ACCOUNT_ID" '
+  (.image.outputResources.amis | type == "array" and length > 0) and
+  all(.image.outputResources.amis[];
+    .region == $region and .accountId == $account and
+    (.image | test("^ami-([0-9a-f]{8}|[0-9a-f]{17})$")))
+' <<<"$BUILT_IMAGE" >/dev/null || fail "Image Builder returned an AMI outside this AWS account and region"
+AMI_ID="$(jq -er --arg region "$(region)" '
+  [.image.outputResources.amis[] | select(.region == $region) | .image] | first
+' <<<"$BUILT_IMAGE")"
+[[ "$AMI_ID" =~ ^ami-([0-9a-f]{8}|[0-9a-f]{17})$ ]] || fail "Image Builder did not return an AMI ID"
+AMI_DESCRIPTION="$(aws_cli ec2 describe-images --image-ids "$AMI_ID" --output json)"
+AMI_SNAPSHOT_ID_LINES="$(jq -er '[.Images[]?.BlockDeviceMappings[]?.Ebs.SnapshotId] | unique | join("\n")' \
+  <<<"$AMI_DESCRIPTION")"
+while IFS= read -r snapshot_id; do
+  [[ -n "$snapshot_id" ]] || continue
+  [[ "$snapshot_id" =~ ^snap-([0-9a-f]{8}|[0-9a-f]{17})$ ]] || \
+    fail "The built AMI returned an invalid snapshot ID"
+done <<<"$AMI_SNAPSHOT_ID_LINES"
+
+tag_image_resource() {
+  local resource_id="$1"
+  local attempt=1 tag_result tag_error
+  while [[ "$attempt" -le 30 ]]; do
+    if tag_error="$(aws_cli ec2 create-tags \
+      --resources "$resource_id" \
+      --tags "Key=AgentFormationDeployment,Value=$DEPLOYMENT" 2>&1)"; then
+      if tag_result="$(aws_cli ec2 describe-tags \
+        --filters \
+          "Name=resource-id,Values=$resource_id" \
+          "Name=key,Values=AgentFormationDeployment" \
+        --output json 2>&1)" && \
+        jq -e --arg resource "$resource_id" --arg deployment "$DEPLOYMENT" '
+          any(.Tags[]?;
+            .ResourceId == $resource and
+            .Key == "AgentFormationDeployment" and
+            .Value == $deployment)
+        ' <<<"$tag_result" >/dev/null; then
+        return 0
+      fi
+    fi
+    [[ "$attempt" -lt 30 ]] || {
+      printf '%s\n' "${tag_error:-${tag_result:-EC2 did not confirm the resource tag}}" >&2
+      fail "The built AMI or snapshot could not be tagged for teardown"
+    }
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+}
+
+say "Tagging the built AMI and snapshots for complete teardown"
+tag_image_resource "$AMI_ID"
+while IFS= read -r snapshot_id; do
+  [[ -n "$snapshot_id" ]] || continue
+  tag_image_resource "$snapshot_id"
+done <<<"$AMI_SNAPSHOT_ID_LINES"
 aws_cli ssm put-parameter \
   --name "$(ami_parameter_path)" \
   --type String \
   --value "$AMI_ID" \
   --overwrite >/dev/null
 
-UPLOAD_BUCKET="$(stack_output "$(foundation_stack)" UploadBucketName)"
 RUNTIME_TEMPLATE_HASH="$(hash_text "$(<"$ROOT_DIR/templates/runtime.yaml")")"
 RUNTIME_TEMPLATE_KEY="provisioning/runtime-$RUNTIME_TEMPLATE_HASH.yaml"
-RUNTIME_TEMPLATE_URL="https://$UPLOAD_BUCKET.s3.$(region).$AWS_URL_SUFFIX/$RUNTIME_TEMPLATE_KEY"
 say "Publishing the reviewed runtime template under its content hash"
-aws_cli s3 cp \
-  "$ROOT_DIR/templates/runtime.yaml" \
-  "s3://$UPLOAD_BUCKET/$RUNTIME_TEMPLATE_KEY" \
-  --sse AES256 >/dev/null
+aws_cli s3api put-object \
+  --bucket "$UPLOAD_BUCKET" \
+  --key "$RUNTIME_TEMPLATE_KEY" \
+  --body "$ROOT_DIR/templates/runtime.yaml" \
+  --server-side-encryption AES256 \
+  --tagging 'agentformation-lifecycle=current' \
+  --expected-bucket-owner "$ACCOUNT_ID" >/dev/null
 
 CLAUDE_MODEL="$(config '.models.claude')"
 CLAUDE_PROFILE="$(aws_cli bedrock get-inference-profile \
@@ -271,16 +324,17 @@ CLAUDE_PROFILE="$(aws_cli bedrock get-inference-profile \
   --output json)" || fail "The configured Claude inference profile is unavailable"
 CLAUDE_PROFILE_ARN="$(jq -er '.inferenceProfileArn' <<<"$CLAUDE_PROFILE")"
 CLAUDE_MODEL_ARNS="$(jq -er '[.models[].modelArn] | select(length > 0) | join(",")' <<<"$CLAUDE_PROFILE")"
+RUNTIME_SUBNET_ID="$(stack_output "$(network_stack)" PrivateSubnetId)"
+RUNTIME_SECURITY_GROUP_ID="$(stack_output "$(network_stack)" RuntimeSecurityGroupId)"
 
 deploy_stack "$(provisioning_stack)" templates/provisioning.yaml \
   DeploymentName="$DEPLOYMENT" \
   UserPoolId="$USER_POOL_ID" \
-  UserRegistryTableName="$(stack_output "$(foundation_stack)" UserRegistryTableName)" \
-  RuntimeTemplateUrl="$RUNTIME_TEMPLATE_URL" \
+  UserRegistryTableName="$USER_REGISTRY_TABLE_NAME" \
   RuntimeTemplateBucket="$UPLOAD_BUCKET" \
   RuntimeTemplateKey="$RUNTIME_TEMPLATE_KEY" \
-  RuntimeSubnetId="$(stack_output "$(network_stack)" PrivateSubnetId)" \
-  RuntimeSecurityGroupId="$(stack_output "$(network_stack)" RuntimeSecurityGroupId)" \
+  RuntimeSubnetId="$RUNTIME_SUBNET_ID" \
+  RuntimeSecurityGroupId="$RUNTIME_SECURITY_GROUP_ID" \
   RuntimeAmiId="$AMI_ID" \
   InstanceType="$(config '.runtime.instanceType')" \
   Architecture="$ARCHITECTURE" \
@@ -290,8 +344,73 @@ deploy_stack "$(provisioning_stack)" templates/provisioning.yaml \
   ClaudeFoundationModelArns="$CLAUDE_MODEL_ARNS" \
   CodexModelId="$(config '.models.codex')" \
   UploadBucketName="$UPLOAD_BUCKET"
+PROVISIONING_STATE_MACHINE_ARN="$(stack_output "$(provisioning_stack)" StateMachineArn)"
+
+retire_superseded_runtime_templates() {
+  local provisioning_template_keys parsed_template_keys template_key template_tags
+  say "Retiring superseded runtime templates without touching the live template"
+  if ! provisioning_template_keys="$(aws_cli s3api list-objects-v2 \
+    --bucket "$UPLOAD_BUCKET" \
+    --prefix provisioning/ \
+    --expected-bucket-owner "$ACCOUNT_ID" \
+    --query 'Contents[].Key' \
+    --output json)"; then
+    printf 'WARNING: Superseded runtime templates could not be listed; deployment remains ready.\n' >&2
+    return 0
+  fi
+  if ! parsed_template_keys="$(jq -er '(. // []) | map(select(type == "string")) | join("\n")' \
+    <<<"$provisioning_template_keys")"; then
+    printf 'WARNING: Superseded runtime template results could not be read; deployment remains ready.\n' >&2
+    return 0
+  fi
+
+  while IFS= read -r template_key; do
+    [[ -n "$template_key" ]] || continue
+    if [[ ! "$template_key" =~ ^provisioning/runtime-[0-9a-f]{64}\.yaml$ ]]; then
+      printf 'WARNING: Skipping an unexpected object under the provisioning prefix.\n' >&2
+      continue
+    fi
+    [[ "$template_key" == "$RUNTIME_TEMPLATE_KEY" ]] && continue
+    if ! template_tags="$(aws_cli s3api get-object-tagging \
+      --bucket "$UPLOAD_BUCKET" \
+      --key "$template_key" \
+      --expected-bucket-owner "$ACCOUNT_ID" \
+      --query TagSet \
+      --output json)"; then
+      printf 'WARNING: A superseded runtime template could not be inspected; continuing.\n' >&2
+      continue
+    fi
+    if jq -e 'any(.[]; .Key == "agentformation-lifecycle" and .Value == "superseded")' \
+      <<<"$template_tags" >/dev/null; then
+      continue
+    fi
+    # The self-copy applies the retirement tag, resets its expiry window, and
+    # deliberately replaces irrelevant object metadata on this YAML object.
+    if ! aws_cli s3api copy-object \
+      --bucket "$UPLOAD_BUCKET" \
+      --key "$template_key" \
+      --copy-source "$UPLOAD_BUCKET/$template_key" \
+      --metadata-directive REPLACE \
+      --tagging-directive REPLACE \
+      --tagging 'agentformation-lifecycle=superseded' \
+      --server-side-encryption AES256 \
+      --expected-bucket-owner "$ACCOUNT_ID" \
+      --expected-source-bucket-owner "$ACCOUNT_ID" >/dev/null; then
+      printf 'WARNING: A superseded runtime template could not be retired; continuing.\n' >&2
+    fi
+  done <<<"$parsed_template_keys"
+}
 
 REPOSITORY_URI="$(stack_output "$(foundation_stack)" WebRepositoryUri)"
+REPOSITORY_NAME="$(stack_output "$(foundation_stack)" WebRepositoryName)"
+if [[ "$AWS_PARTITION" == "aws-cn" ]]; then
+  ECR_URL_SUFFIX="amazonaws.com.cn"
+else
+  ECR_URL_SUFFIX="amazonaws.com"
+fi
+EXPECTED_REPOSITORY_URI="$ACCOUNT_ID.dkr.ecr.$(region).$ECR_URL_SUFFIX/$REPOSITORY_NAME"
+[[ "$REPOSITORY_URI" == "$EXPECTED_REPOSITORY_URI" ]] || \
+  fail "The foundation stack returned a web repository outside this account or region"
 IMAGE_TAG="$(date -u +%Y%m%d%H%M%S)"
 REGISTRY_HOST="${REPOSITORY_URI%%/*}"
 DOCKER_CONFIG_DIR="$STATE_DIR/docker"
@@ -346,59 +465,51 @@ DOCKER_HOST="$DOCKER_ENDPOINT" docker --config "$DOCKER_CONFIG_DIR" buildx build
 cleanup_docker_auth
 trap - EXIT
 
+WEB_IMAGE_DIGEST="$(aws_cli ecr describe-images \
+  --repository-name "$REPOSITORY_NAME" \
+  --image-ids "imageTag=$IMAGE_TAG" \
+  --query 'imageDetails[0].imageDigest' \
+  --output text)"
+[[ "$WEB_IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || \
+  fail "ECR did not return a valid digest for the web image"
+WEB_IMAGE_IDENTIFIER="$REPOSITORY_URI@$WEB_IMAGE_DIGEST"
+
 deploy_web_stack() {
   local public_url="$1"
   deploy_stack "$(web_stack)" templates/web.yaml \
     DeploymentName="$DEPLOYMENT" \
-    ImageIdentifier="$REPOSITORY_URI:$IMAGE_TAG" \
+    ImageIdentifier="$WEB_IMAGE_IDENTIFIER" \
     PublicUrl="$public_url" \
     UserPoolClientId="$CLIENT_ID" \
-    CognitoIssuer="$(stack_output "$(foundation_stack)" CognitoIssuer)" \
+    UserPoolId="$USER_POOL_ID" \
     CognitoClientSecretArn="$CLIENT_SECRET_ARN" \
-    AuthSecretArn="$(stack_output "$(foundation_stack)" AuthSecretArn)" \
-    UserRegistryTableName="$(stack_output "$(foundation_stack)" UserRegistryTableName)" \
-    UploadBucketName="$(stack_output "$(foundation_stack)" UploadBucketName)" \
-    TerminalSessionDocumentName="$(stack_output "$(foundation_stack)" TerminalSessionDocumentName)" \
-    ProvisioningStateMachineArn="$(stack_output "$(provisioning_stack)" StateMachineArn)"
+    AuthSecretArn="$AUTH_SECRET_ARN" \
+    UserRegistryTableName="$USER_REGISTRY_TABLE_NAME" \
+    ControlTableName="$CONTROL_TABLE_NAME" \
+    UploadBucketName="$UPLOAD_BUCKET" \
+    TerminalSessionDocumentName="$TERMINAL_SESSION_DOCUMENT_NAME" \
+    UploadDeliveryDocumentName="$UPLOAD_DELIVERY_DOCUMENT_NAME" \
+    OAuthRelayDocumentName="$OAUTH_RELAY_DOCUMENT_NAME" \
+    ProvisioningStateMachineArn="$PROVISIONING_STATE_MACHINE_ARN"
 }
 
-INITIAL_PUBLIC_URL="$CONFIGURED_PUBLIC_URL"
-if [[ -z "$INITIAL_PUBLIC_URL" ]]; then
-  INITIAL_PUBLIC_URL="$(stack_output "$(web_stack)" ServiceUrl 2>/dev/null || true)"
-fi
-if [[ ! "$INITIAL_PUBLIC_URL" =~ ^https?:// ]]; then
-  INITIAL_PUBLIC_URL='http://localhost:3000'
-fi
 deploy_web_stack "$INITIAL_PUBLIC_URL"
 
 SERVICE_URL="$(stack_output "$(web_stack)" ServiceUrl)"
+require_https_origin "The deployed web service URL" "$SERVICE_URL"
 PUBLIC_URL="${CONFIGURED_PUBLIC_URL:-$SERVICE_URL}"
+require_https_origin "The final public URL" "$PUBLIC_URL"
 if [[ "$INITIAL_PUBLIC_URL" != "$PUBLIC_URL" ]]; then
   say "Applying the final public address to Auth.js"
   deploy_web_stack "$PUBLIC_URL"
 fi
 say "Updating Cognito callback URLs for the public web address"
-configure_cognito_client \
-  "$(jq -cn --arg publicUrl "$PUBLIC_URL" '[($publicUrl + "/api/auth/callback/cognito")]')" \
-  "$(jq -cn --arg publicUrl "$PUBLIC_URL" '[($publicUrl + "/")]')"
-
-say "Restricting browser uploads to the deployed web address"
-UPLOAD_CORS_CONFIGURATION="$(jq -cn --arg publicUrl "$PUBLIC_URL" '{
-  CORSRules: [{
-    AllowedHeaders: ["content-type"],
-    AllowedMethods: ["PUT"],
-    AllowedOrigins: [$publicUrl],
-    ExposeHeaders: ["ETag"],
-    MaxAgeSeconds: 300
-  }]
-}')"
-aws_cli s3api put-bucket-cors \
-  --bucket "$(stack_output "$(foundation_stack)" UploadBucketName)" \
-  --cors-configuration "$UPLOAD_CORS_CONFIGURATION"
+deploy_foundation_stack true "$PUBLIC_URL"
 
 cat >"$STATE_DIR/deployment.json" <<STATE
 {"deploymentName":"$DEPLOYMENT","region":"$(region)","serviceUrl":"$PUBLIC_URL","appRunnerServiceUrl":"$SERVICE_URL","imageBuildVersionArn":"$IMAGE_ARN"}
 STATE
 chmod 0600 "$STATE_DIR/deployment.json"
 
+retire_superseded_runtime_templates
 say "AgentFormation deployment is ready: $PUBLIC_URL"

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { createCognitoProvider } from "./auth-provider";
 import { getAuthEnvironment } from "./env";
 import { getRuntimeForSubject } from "./registry";
+import { isRuntimeAccessRevoked } from "./runtime-access";
 
 const cognitoProfileSchema = z.object({
   sub: z.string().uuid(),
@@ -17,7 +18,8 @@ const authEnvironment = getAuthEnvironment();
 
 const nextAuth = NextAuth({
   providers: [createCognitoProvider(authEnvironment)],
-  session: { strategy: "jwt" },
+  session: { strategy: "jwt", maxAge: 60 * 60 },
+  jwt: { maxAge: 60 * 60 },
   callbacks: {
     async signIn({ profile }) {
       const parsed = cognitoProfileSchema.safeParse(profile);
@@ -26,13 +28,19 @@ const nextAuth = NextAuth({
       }
 
       const runtime = await getRuntimeForSubject(parsed.data.sub);
-      return runtime?.status !== "disabled";
+      return !isRuntimeAccessRevoked(runtime);
     },
     async jwt({ token, profile }) {
       const parsed = cognitoProfileSchema.safeParse(profile);
       if (parsed.success) {
         token.subject = parsed.data.sub;
         token.email = parsed.data.email;
+      }
+      if (typeof token.subject === "string") {
+        const runtime = await getRuntimeForSubject(token.subject);
+        if (isRuntimeAccessRevoked(runtime)) {
+          return null;
+        }
       }
       return token;
     },
