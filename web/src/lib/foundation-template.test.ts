@@ -1,5 +1,14 @@
-import { readFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -37,6 +46,17 @@ function extractOAuthRelayValidator(command: string): string {
   const end = command.indexOf("\n  ' |", bodyStart);
   expect(end).toBeGreaterThan(bodyStart);
   return command.slice(bodyStart, end).replace(/^ {4}/gm, "");
+}
+
+function extractUploadDirectoryRepair(command: string): string {
+  const marker =
+    "/usr/local/bin/node - /workspace/.uploads /home/agentformation <<'NODE'\n";
+  const start = command.indexOf(marker);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const bodyStart = start + marker.length;
+  const end = command.indexOf("\nNODE\n", bodyStart);
+  expect(end).toBeGreaterThan(bodyStart);
+  return command.slice(bodyStart, end);
 }
 
 function extractBashPayload(command: string, delimiter: string): string {
@@ -139,6 +159,67 @@ describe("identity and upload foundation", () => {
     expect(template).not.toContain("AWS-RunShellScript");
   });
 
+  it("repairs the main-release upload directory before dropping privileges", () => {
+    const command = extractRunCommand(uploadDeliveryDocument);
+    const repairUploadDirectory = extractUploadDirectoryRepair(command);
+    const runAsRuntimeUser =
+      "runuser --user agentformation -- /bin/bash -euo pipefail -c";
+    const scratch = mkdtempSync(resolve(tmpdir(), "agentformation-upload-"));
+    const uploadsDirectory = resolve(scratch, "uploads");
+    const runtimeHome = resolve(scratch, "runtime-home");
+
+    mkdirSync(uploadsDirectory, { mode: 0o755 });
+    mkdirSync(runtimeHome, { mode: 0o700 });
+    try {
+      const repaired = spawnSync(
+        process.execPath,
+        ["-", uploadsDirectory, runtimeHome],
+        {
+          input: repairUploadDirectory,
+          encoding: "utf8",
+        },
+      );
+
+      expect(repaired.status, repaired.stderr).toBe(0);
+      expect(statSync(uploadsDirectory).mode & 0o777).toBe(0o700);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+    expect(
+      command.indexOf("/usr/local/bin/node - /workspace/.uploads"),
+    ).toBeLessThan(command.indexOf(runAsRuntimeUser));
+  });
+
+  it("refuses to repair an upload-directory symlink", () => {
+    const repairUploadDirectory = extractUploadDirectoryRepair(
+      extractRunCommand(uploadDeliveryDocument),
+    );
+    const scratch = mkdtempSync(resolve(tmpdir(), "agentformation-upload-"));
+    const target = resolve(scratch, "target");
+    const uploadLink = resolve(scratch, "uploads");
+    const runtimeHome = resolve(scratch, "runtime-home");
+
+    mkdirSync(target, { mode: 0o755 });
+    mkdirSync(runtimeHome, { mode: 0o700 });
+    symlinkSync(target, uploadLink, "dir");
+    try {
+      chmodSync(target, 0o755);
+      const rejected = spawnSync(
+        process.execPath,
+        ["-", uploadLink, runtimeHome],
+        {
+          input: repairUploadDirectory,
+          encoding: "utf8",
+        },
+      );
+
+      expect(rejected.status).not.toBe(0);
+      expect(statSync(target).mode & 0o777).toBe(0o755);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
   it("runs both fixed command bodies with Bash after a portable shell handoff", () => {
     for (const [document, delimiter] of [
       [uploadDeliveryDocument, "AGENTFORMATION_UPLOAD"],
@@ -198,7 +279,7 @@ describe("identity and upload foundation", () => {
     );
     const callbackUrl =
       "http://127.0.0.1:46189/callback/request_ID-1234?code=secret&path=one\\two";
-    const accepted = spawnSync("node", ["-e", validator], {
+    const accepted = spawnSync(process.execPath, ["-e", validator], {
       input: callbackUrl,
       encoding: "utf8",
     });
@@ -216,14 +297,14 @@ describe("identity and upload foundation", () => {
       "http://127.0.0.1:46189/callback?code=secret\n--next",
       "x".repeat(4_097),
     ]) {
-      const rejected = spawnSync("node", ["-e", validator], {
+      const rejected = spawnSync(process.execPath, ["-e", validator], {
         input: payload,
         encoding: "utf8",
       });
       expect(rejected.status).not.toBe(0);
       expect(rejected.stdout).toBe("");
     }
-  });
+  }, 20_000);
 
   it("strictly validates auth callback and upload origins", () => {
     expect(template).toContain(

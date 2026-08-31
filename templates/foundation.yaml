@@ -319,6 +319,28 @@ Resources:
                   : "${SSM_Filename:?missing Filename}"
                   : "${SSM_TmuxSession:?missing TmuxSession}"
                   : "${SSM_FileSize:?missing FileSize}"
+                  /usr/local/bin/node - /workspace/.uploads /home/agentformation <<'NODE'
+                  const fs = require("node:fs");
+                  const [uploadsDirectory, runtimeHome] = process.argv.slice(2);
+                  try {
+                    fs.mkdirSync(uploadsDirectory, { mode: 0o700 });
+                  } catch (error) {
+                    if (error?.code !== "EEXIST") throw error;
+                  }
+                  const directory = fs.openSync(
+                    uploadsDirectory,
+                    fs.constants.O_RDONLY |
+                      fs.constants.O_DIRECTORY |
+                      fs.constants.O_NOFOLLOW,
+                  );
+                  try {
+                    const runtimeUser = fs.statSync(runtimeHome);
+                    fs.fchownSync(directory, runtimeUser.uid, runtimeUser.gid);
+                    fs.fchmodSync(directory, 0o700);
+                  } finally {
+                    fs.closeSync(directory);
+                  }
+                  NODE
                   runuser --user agentformation -- /bin/bash -euo pipefail -c '
                     upload_bucket="$1"
                     user_subject="$2"

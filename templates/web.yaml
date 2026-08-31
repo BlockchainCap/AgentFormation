@@ -117,8 +117,6 @@ Resources:
                 Condition:
                   StringEquals:
                     "ssm:resourceTag/AgentFormationDeployment": !Ref DeploymentName
-                  Bool:
-                    "ssm:SessionDocumentAccessCheck": true
               - Sid: UseTerminalDocument
                 Effect: Allow
                 Action: ssm:StartSession

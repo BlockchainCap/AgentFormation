@@ -171,6 +171,8 @@ export function useTerminalPaneEffects({
     const scrollContainer = scrollRef.current;
     if (!scrollContainer) return;
 
+    scrollContainer.scrollLeft = 0;
+
     let touchStartX = 0;
     let touchStartY = 0;
     let touchLastX = 0;
@@ -178,12 +180,30 @@ export function useTerminalPaneEffects({
     let touchResidualY = 0;
     let touchAxis: TerminalScrollAxis | null = null;
     let hasTrackedTouch = false;
-    const scrollTerminalLines = (lines: number) => {
+    const scrollTerminalLines = (
+      lines: number,
+      clientX: number,
+      clientY: number,
+    ) => {
       const terminal = terminalRef.current;
       if (!terminal || lines === 0) return;
 
-      terminal.scrollLines(lines);
-      updateTerminalReviewState();
+      if (!terminal.element || typeof WheelEvent !== "function") {
+        terminal.scrollLines(lines);
+        updateTerminalReviewState();
+        return;
+      }
+
+      terminal.element.dispatchEvent(
+        new WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          clientX,
+          clientY,
+          deltaMode: WheelEvent.DOM_DELTA_LINE,
+          deltaY: lines,
+        }),
+      );
     };
 
     const handleTouchStart = (event: TouchEvent) => {
@@ -238,7 +258,7 @@ export function useTerminalPaneEffects({
 
       const lines = Math.trunc(touchResidualY / TERMINAL_TOUCH_SCROLL_LINE_PX);
       touchResidualY -= lines * TERMINAL_TOUCH_SCROLL_LINE_PX;
-      scrollTerminalLines(lines);
+      scrollTerminalLines(lines, nextX, nextY);
     };
 
     const handleTouchEnd = () => {

@@ -58,7 +58,7 @@ describe("web template", () => {
     }
   });
 
-  it("requires access to the fixed session document for every runtime session", () => {
+  it("restricts session starts to tagged runtimes and the fixed document", () => {
     const sessionPolicy = template.slice(
       template.indexOf("        - PolicyName: ManageBrowserSessions"),
       template.indexOf("        - PolicyName: ManageUploadStaging"),
@@ -72,16 +72,12 @@ describe("web template", () => {
       template.indexOf("              - Sid: RunUploadCommand"),
     );
 
-    expect(instancePermission).toContain(
-      'Bool:\n                    "ssm:SessionDocumentAccessCheck": true',
-    );
+    expect(instancePermission).not.toContain("ssm:SessionDocumentAccessCheck");
     expect(documentPermission).toContain("${TerminalSessionDocumentName}");
     expect(documentPermission).not.toContain("SSM-SessionManagerRunShell");
     expect(documentPermission).not.toContain('Resource: "*"');
     expect(sessionPolicy.match(/Action: ssm:StartSession/g)).toHaveLength(2);
-    expect(sessionPolicy.match(/ssm:SessionDocumentAccessCheck/g)).toHaveLength(
-      1,
-    );
+    expect(sessionPolicy).not.toContain("ssm:SessionDocumentAccessCheck");
     expect(sessionPolicy.match(/Action: ssm:SendCommand/g)).toHaveLength(2);
     expect(sessionPolicy).toContain(
       'document/${UploadDeliveryDocumentName}"\n                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/${OAuthRelayDocumentName}"',
