@@ -410,10 +410,10 @@ assert_no_runtime_stacks() {
 # Remove the browser first so no new provisioning request can be accepted.
 delete_named_stack "$(web_stack)"
 
-# Then stop every already-running workflow and remove the state machine before
-# taking the authoritative runtime-stack snapshot.
+# Then stop every already-running workflow before taking the authoritative
+# runtime-stack snapshot. Keep the provisioning stack until its runtime
+# CloudFormation service role is no longer needed.
 stop_all_provisioning_executions || fail "Provisioning executions could not be stopped; teardown did not continue"
-delete_named_stack "$(provisioning_stack)"
 
 RUNTIME_STACKS="$(list_runtime_stacks)"
 while IFS= read -r runtime_stack; do
@@ -421,6 +421,7 @@ while IFS= read -r runtime_stack; do
   delete_stack "$runtime_stack"
 done <<<"$(jq -r '.[]' <<<"$RUNTIME_STACKS")"
 assert_no_runtime_stacks
+delete_named_stack "$(provisioning_stack)"
 
 IMAGE_STACK_PRESENT=false
 if stack_exists "$(image_stack)"; then

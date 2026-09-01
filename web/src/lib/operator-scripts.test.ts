@@ -126,11 +126,16 @@ describe("operator script safety contracts", () => {
       destroy.lastIndexOf("aws_cli s3api put-bucket-policy"),
     );
     expect(destroy.indexOf("stop_all_provisioning_executions")).toBeLessThan(
-      destroy.indexOf('delete_named_stack "$(provisioning_stack)"'),
+      destroy.indexOf('RUNTIME_STACKS="$(list_runtime_stacks)"'),
     );
     expect(
+      destroy.indexOf('RUNTIME_STACKS="$(list_runtime_stacks)"'),
+    ).toBeLessThan(
       destroy.indexOf('delete_named_stack "$(provisioning_stack)"'),
-    ).toBeLessThan(destroy.indexOf('RUNTIME_STACKS="$(list_runtime_stacks)"'));
+    );
+    expect(destroy.lastIndexOf("assert_no_runtime_stacks")).toBeLessThan(
+      destroy.indexOf('delete_named_stack "$(provisioning_stack)"'),
+    );
   });
 
   it("retries only a concurrent registry change during disable", () => {

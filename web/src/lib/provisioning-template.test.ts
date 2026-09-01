@@ -65,14 +65,14 @@ describe("runtime provisioning template", () => {
       "Sid: CreateBoundaryConstrainedRuntimeRoles",
       "Sid: ManageNamedRuntimeRoles",
     );
+    const namedRoleLifecycle = section(
+      runtimeCloudFormationRole,
+      "Sid: ManageNamedRuntimeRoles",
+      "Sid: AttachOnlySystemsManagerCore",
+    );
     const managedPolicyAttachment = section(
       runtimeCloudFormationRole,
       "Sid: AttachOnlySystemsManagerCore",
-      "Sid: KeepRuntimeBoundaryAttached",
-    );
-    const boundaryRemovalDeny = section(
-      runtimeCloudFormationRole,
-      "Sid: KeepRuntimeBoundaryAttached",
       "Sid: ManageNamedRuntimeInstanceProfiles",
     );
     expect(template).toContain("RuntimePermissionsBoundaryPolicy:");
@@ -92,9 +92,12 @@ describe("runtime provisioning template", () => {
     expect(managedPolicyAttachment).toContain(
       'iam:PolicyARN: !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"',
     );
-    expect(boundaryRemovalDeny).toContain("Effect: Deny");
-    expect(boundaryRemovalDeny).toContain(
-      "Action: iam:DeleteRolePermissionsBoundary",
+    expect(namedRoleLifecycle).toContain("- iam:DeleteRolePermissionsBoundary");
+    expect(namedRoleLifecycle).toContain(
+      'Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${DeploymentName}-runtime-*"',
+    );
+    expect(runtimeCloudFormationRole).not.toContain(
+      "Sid: KeepRuntimeBoundaryAttached",
     );
     expect(template).toContain(
       "- ParameterKey: RuntimePermissionsBoundaryArn\n                  ParameterValue: !Ref RuntimePermissionsBoundaryPolicy",

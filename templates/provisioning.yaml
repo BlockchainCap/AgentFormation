@@ -196,6 +196,7 @@ Resources:
                   - iam:GetRolePolicy
                   - iam:PutRolePolicy
                   - iam:DeleteRolePolicy
+                  - iam:DeleteRolePermissionsBoundary
                   - iam:ListRolePolicies
                   - iam:ListAttachedRolePolicies
                   - iam:ListInstanceProfilesForRole
@@ -211,10 +212,6 @@ Resources:
                 Condition:
                   ArnEquals:
                     iam:PolicyARN: !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
-              - Sid: KeepRuntimeBoundaryAttached
-                Effect: Deny
-                Action: iam:DeleteRolePermissionsBoundary
-                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${DeploymentName}-runtime-*"
               - Sid: ManageNamedRuntimeInstanceProfiles
                 Effect: Allow
                 Action:

@@ -34,7 +34,8 @@ function runDestroy(
     | "drain-short-response"
     | "drain-pagination"
     | "drain-nonascii"
-    | "drain-malformed-listing",
+    | "drain-malformed-listing"
+    | "runtime-service-role-order",
 ) {
   const fixture = mkdtempSync(join(tmpdir(), "agentformation-destroy-"));
   const configFile = join(fixture, "agentformation.json");
@@ -86,26 +87,70 @@ case "$service $operation" in
       else
         not_found
       fi
+    elif [[ "$scenario" == "runtime-service-role-order" && "$arguments" == *"--stack-name example-web"* ]]; then
+      if [[ -f "$state/web-deleted" ]]; then
+        not_found
+      else
+        printf '%s\\n' '{"Stacks":[{"StackName":"example-web","Tags":[{"Key":"AgentFormationDeployment","Value":"example"}]}]}'
+      fi
+    elif [[ "$scenario" == "runtime-service-role-order" && "$arguments" == *"--stack-name example-provisioning"* ]]; then
+      if [[ -f "$state/provisioning-deleted" ]]; then
+        not_found
+      elif [[ "$arguments" == *"StateMachineArn"* ]]; then
+        printf '%s\\n' 'arn:aws:states:us-west-2:123456789012:stateMachine:example-provisioning'
+      else
+        printf '%s\\n' '{"Stacks":[{"StackName":"example-provisioning","Tags":[{"Key":"AgentFormationDeployment","Value":"example"}]}]}'
+      fi
+    elif [[ "$scenario" == "runtime-service-role-order" && "$arguments" == *"--stack-name example-runtime-0000000000004000"* ]]; then
+      if [[ -f "$state/runtime-deleted" ]]; then
+        not_found
+      else
+        printf '%s\\n' '{"Stacks":[{"StackName":"example-runtime-0000000000004000","Tags":[{"Key":"AgentFormationDeployment","Value":"example"}]}]}'
+      fi
     elif [[ "$arguments" == *"--stack-name"* ]]; then
       not_found
+    elif [[ "$scenario" == "runtime-service-role-order" && ! -f "$state/runtime-deleted" ]]; then
+      printf '%s\\n' '{"Stacks":[{"StackName":"example-runtime-0000000000004000","Tags":[{"Key":"AgentFormationDeployment","Value":"example"}]}]}'
     else
       printf '%s\\n' '{"Stacks":[]}'
     fi
     ;;
   "cloudformation delete-stack")
-    [[ "$arguments" == *"--stack-name example-foundation"* ]] || exit 64
-    [[ -f "$state/policy-frozen" ]] || exit 65
-    if [[ "$scenario" == "delete-failure" || "$scenario" == "delete-failure-no-policy" ]]; then
-      printf 'simulated stack delete failure\\n' >&2
-      exit 70
+    if [[ "$scenario" == "runtime-service-role-order" && "$arguments" == *"--stack-name example-web"* ]]; then
+      : >"$state/web-deleted"
+    elif [[ "$scenario" == "runtime-service-role-order" && "$arguments" == *"--stack-name example-runtime-0000000000004000"* ]]; then
+      if [[ -f "$state/provisioning-deleted" ]]; then
+        printf 'runtime service role no longer exists\\n' >&2
+        exit 70
+      fi
+      : >"$state/runtime-deleted"
+    elif [[ "$scenario" == "runtime-service-role-order" && "$arguments" == *"--stack-name example-provisioning"* ]]; then
+      [[ -f "$state/runtime-deleted" ]] || {
+        printf 'runtime still depends on provisioning service role\\n' >&2
+        exit 70
+      }
+      : >"$state/provisioning-deleted"
+    else
+      [[ "$arguments" == *"--stack-name example-foundation"* ]] || exit 64
+      [[ -f "$state/policy-frozen" ]] || exit 65
+      if [[ "$scenario" == "delete-failure" || "$scenario" == "delete-failure-no-policy" ]]; then
+        printf 'simulated stack delete failure\\n' >&2
+        exit 70
+      fi
+      if [[ "$scenario" == "multipart" ]]; then
+        [[ -f "$state/multipart-aborted" ]] || exit 66
+      fi
+      : >"$state/foundation-deleted"
     fi
-    if [[ "$scenario" == "multipart" ]]; then
-      [[ -f "$state/multipart-aborted" ]] || exit 66
-    fi
-    : >"$state/foundation-deleted"
     ;;
   "cloudformation wait")
-    [[ "$arguments" == *"stack-delete-complete --stack-name example-foundation"* ]] || exit 64
+    if [[ "$scenario" != "runtime-service-role-order" ]]; then
+      [[ "$arguments" == *"stack-delete-complete --stack-name example-foundation"* ]] || exit 64
+    fi
+    ;;
+  "stepfunctions list-executions")
+    [[ "$scenario" == "runtime-service-role-order" ]] || exit 64
+    printf '%s\\n' '{"executions":[]}'
     ;;
   "imagebuilder list-images")
     if [[ "$scenario" == "read-error" ]]; then
@@ -283,6 +328,20 @@ esac
 }
 
 describe("destroy script convergence", () => {
+  it("deletes runtimes before removing their CloudFormation service role", () => {
+    const run = runDestroy("runtime-service-role-order");
+    try {
+      expect(run.result.status, run.result.stderr).toBe(0);
+      expect(run.wasCreated("runtime-deleted")).toBe(true);
+      expect(run.wasCreated("provisioning-deleted")).toBe(true);
+      expect(run.result.stdout).toContain(
+        "AgentFormation AWS resources were deleted",
+      );
+    } finally {
+      rmSync(run.fixture, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when Image Builder cannot be read", () => {
     const run = runDestroy("read-error");
     try {
