@@ -29,7 +29,7 @@ interface TerminalPaneEffectsProps {
   dpadPosition: DpadPosition | null;
   isActive: boolean;
   reconnectIfNeeded: () => void;
-  resetTransport: (mode: "fresh" | "resume" | "background" | "unmount") => void;
+  resetTransport: (mode: "fresh" | "resume" | "unmount") => void;
   scheduleTerminalSizeBurst: () => void;
   scrollRef: RefObject<HTMLDivElement | null>;
   sessionRef: RefObject<SessionInfo | null>;
@@ -323,42 +323,36 @@ export function useTerminalPaneEffects({
 
   const startConnection = useEffectEvent(() => connect("start"));
   const reconnectAfterResume = useEffectEvent(() => reconnectIfNeeded());
-  const suspendConnection = useEffectEvent(() => {
+  const terminateBeforeUnload = useEffectEvent(() => {
     const activeSession = sessionRef.current;
     if (activeSession?.sessionId && activeSession.terminateToken) {
-      sessionRef.current = null;
       beaconTerminateSession(
         activeSession.sessionId,
         activeSession.terminateToken,
       );
     }
-    resetTransport("background");
   });
   const unmountConnection = useEffectEvent(() => resetTransport("unmount"));
 
-  // Auto-connect on mount; detach before mobile browsers suspend the page.
+  // Keep the live attachment while mobile browsers background the page. This
+  // preserves tmux input and shared scrolling across every attached browser.
   useEffect(() => {
     void startConnection().catch(() => {
       // connect reports a user-safe error and owns its cleanup path.
     });
 
-    const handlePageHide = () => suspendConnection();
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         reconnectAfterResume();
-      } else {
-        suspendConnection();
       }
     };
-    const handlePageShow = (event: PageTransitionEvent) => {
-      if (event.persisted) reconnectAfterResume();
-    };
+    const handlePageShow = () => reconnectAfterResume();
 
-    window.addEventListener("pagehide", handlePageHide);
+    window.addEventListener("beforeunload", terminateBeforeUnload);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pageshow", handlePageShow);
     return () => {
-      window.removeEventListener("pagehide", handlePageHide);
+      window.removeEventListener("beforeunload", terminateBeforeUnload);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pageshow", handlePageShow);
       unmountConnection();

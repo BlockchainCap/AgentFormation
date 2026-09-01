@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { TerminalPaneView } from "./terminal-pane-view";
@@ -50,7 +49,7 @@ import {
 } from "./terminal-shared";
 
 const MAX_PAUSED_OUTPUT_CHARACTERS = 1_000_000;
-type TransportResetMode = "fresh" | "resume" | "background" | "unmount";
+type TransportResetMode = "fresh" | "resume" | "unmount";
 
 export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -65,7 +64,6 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
   const connectionIdRef = useRef(0);
   const connectionStartedAtRef = useRef(0);
   const connectInFlightRef = useRef(false);
-  const submitInFlightRef = useRef(false);
   const queuedConnectModeRef = useRef<ConnectMode | null>(null);
   const connectRef = useRef<(mode?: ConnectMode) => Promise<void>>(
     async () => undefined,
@@ -83,7 +81,6 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
   const [state, setState] = useState<ConnectionState>("idle");
   const [error, setError] = useState("");
   const [inputValue, setInputValue] = useState("");
-  const [isSubmittingInput, setIsSubmittingInput] = useState(false);
   const [isReviewingHistory, setIsReviewingHistory] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState<number | null>(null);
   const [dpadPosition, setDpadPosition] = useState<DpadPosition | null>(null);
@@ -96,7 +93,6 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     resetUploadState,
     setPendingAttachments,
     uploadError,
-    uploadInFlightRef,
     uploadStatus,
   } = useTerminalUpload({ inputRef, tmuxSession });
   const dpadDragRef = useRef<{
@@ -701,16 +697,16 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     connectRef.current = connect;
   }, [connect]);
 
-  const sendInput = useCallback(async (text: string): Promise<boolean> => {
-    const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+  const sendInput = useCallback(async (text: string) => {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      return;
+    }
     const { ssm } = await import("ssm-session");
-    if (socketRef.current !== socket || socket.readyState !== WebSocket.OPEN) {
-      return false;
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      return;
     }
     const encoder = new TextEncoder();
-    ssm.sendText(socket, encoder.encode(text), seqRef.current++);
-    return true;
+    ssm.sendText(socketRef.current, encoder.encode(text), seqRef.current++);
   }, []);
 
   const lastValueRef = useRef("");
@@ -721,8 +717,8 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     void sendInput(CLEAR_TERMINAL_INPUT);
   }, [sendInput]);
 
-  const handleQuickKeyActivate = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>) => {
+  const handleQuickKeyPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
       event.preventDefault();
 
       if (event.currentTarget.dataset.action === "clear") {
@@ -753,30 +749,24 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     [sendInput],
   );
 
-  const handleSubmit = useCallback(async () => {
-    if (submitInFlightRef.current || uploadInFlightRef.current) return;
-    submitInFlightRef.current = true;
-    setIsSubmittingInput(true);
-    try {
-      const attachmentSuffix = getAttachmentSubmitSuffix(
-        lastValueRef.current,
-        pendingAttachments,
-      );
-      const sent = await sendInput(`${attachmentSuffix}\r`);
-      if (sent) {
-        setInputValue("");
-        lastValueRef.current = "";
-        setPendingAttachments([]);
-      } else {
-        setError("Terminal connection was lost. Reconnect and submit again.");
-      }
-    } catch {
-      setError("Terminal input could not be sent. Reconnect and submit again.");
-    } finally {
-      submitInFlightRef.current = false;
-      setIsSubmittingInput(false);
+  const handleSubmit = useCallback(() => {
+    const attachmentSuffix = getAttachmentSubmitSuffix(
+      lastValueRef.current,
+      pendingAttachments,
+    );
+    if (attachmentSuffix) {
+      void sendInput(attachmentSuffix).then(() => {
+        window.setTimeout(() => {
+          void sendInput("\r");
+        }, 50);
+      });
+    } else {
+      void sendInput("\r");
     }
-  }, [pendingAttachments, sendInput, setPendingAttachments, uploadInFlightRef]);
+    setInputValue("");
+    lastValueRef.current = "";
+    setPendingAttachments([]);
+  }, [pendingAttachments, sendInput, setPendingAttachments]);
 
   const handleDpadPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -840,7 +830,7 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
       if (e.key === "Enter") {
         e.preventDefault();
         if (isSubmitShortcut(e)) {
-          void handleSubmit();
+          handleSubmit();
           return;
         }
 
@@ -850,8 +840,8 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     [handleSubmit],
   );
 
-  const handleDpadButtonActivate = useCallback(
-    (e: ReactMouseEvent<HTMLButtonElement>) => {
+  const handleDpadButtonPointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLButtonElement>) => {
       const seq = e.currentTarget.dataset.seq;
       if (!seq) return;
 
@@ -914,14 +904,14 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
       error={error}
       fileInputRef={fileInputRef}
       handleChange={handleChange}
-      handleDpadButtonActivate={handleDpadButtonActivate}
+      handleDpadButtonPointerDown={handleDpadButtonPointerDown}
       handleDpadPointerCancel={handleDpadPointerCancel}
       handleDpadPointerDown={handleDpadPointerDown}
       handleDpadPointerMove={handleDpadPointerMove}
       handleDpadPointerUp={handleDpadPointerUp}
       handleFileSelection={handleFileSelection}
       handleKeyDown={handleKeyDown}
-      handleQuickKeyActivate={handleQuickKeyActivate}
+      handleQuickKeyPointerDown={handleQuickKeyPointerDown}
       handleSelectionPointerCancel={handleSelectionPointerCancel}
       handleSelectionPointerDown={handleSelectionPointerDown}
       handleSelectionPointerMove={handleSelectionPointerMove}
@@ -932,7 +922,6 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
       inputValue={inputValue}
       isActive={isActive}
       isConnected={isConnected}
-      isSubmittingInput={isSubmittingInput}
       isReviewingHistory={isReviewingHistory}
       isTextSelectionMode={isTextSelectionMode}
       pendingAttachments={pendingAttachments}

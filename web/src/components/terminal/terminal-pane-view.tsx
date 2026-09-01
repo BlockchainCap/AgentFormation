@@ -3,7 +3,6 @@
 import type {
   ChangeEventHandler,
   KeyboardEventHandler,
-  MouseEventHandler,
   PointerEventHandler,
   RefObject,
 } from "react";
@@ -46,14 +45,14 @@ interface TerminalPaneViewProps {
   error: string;
   fileInputRef: RefObject<HTMLInputElement | null>;
   handleChange: ChangeEventHandler<HTMLInputElement>;
-  handleDpadButtonActivate: MouseEventHandler<HTMLButtonElement>;
+  handleDpadButtonPointerDown: PointerEventHandler<HTMLButtonElement>;
   handleDpadPointerCancel: PointerEventHandler<HTMLDivElement>;
   handleDpadPointerDown: PointerEventHandler<HTMLDivElement>;
   handleDpadPointerMove: PointerEventHandler<HTMLDivElement>;
   handleDpadPointerUp: PointerEventHandler<HTMLDivElement>;
   handleFileSelection: ChangeEventHandler<HTMLInputElement>;
   handleKeyDown: KeyboardEventHandler<HTMLInputElement>;
-  handleQuickKeyActivate: MouseEventHandler<HTMLButtonElement>;
+  handleQuickKeyPointerDown: PointerEventHandler<HTMLButtonElement>;
   handleSelectionPointerCancel: PointerEventHandler<HTMLDivElement>;
   handleSelectionPointerDown: PointerEventHandler<HTMLDivElement>;
   handleSelectionPointerMove: PointerEventHandler<HTMLDivElement>;
@@ -64,7 +63,6 @@ interface TerminalPaneViewProps {
   inputValue: string;
   isActive: boolean;
   isConnected: boolean;
-  isSubmittingInput: boolean;
   isReviewingHistory: boolean;
   isTextSelectionMode: boolean;
   pendingAttachments: PendingAttachment[];
@@ -90,14 +88,14 @@ export function TerminalPaneView({
   error,
   fileInputRef,
   handleChange,
-  handleDpadButtonActivate,
+  handleDpadButtonPointerDown,
   handleDpadPointerCancel,
   handleDpadPointerDown,
   handleDpadPointerMove,
   handleDpadPointerUp,
   handleFileSelection,
   handleKeyDown,
-  handleQuickKeyActivate,
+  handleQuickKeyPointerDown,
   handleSelectionPointerCancel,
   handleSelectionPointerDown,
   handleSelectionPointerMove,
@@ -108,7 +106,6 @@ export function TerminalPaneView({
   inputValue,
   isActive,
   isConnected,
-  isSubmittingInput,
   isReviewingHistory,
   isTextSelectionMode,
   pendingAttachments,
@@ -176,8 +173,7 @@ export function TerminalPaneView({
       {isConnected && isTextSelectionMode && (
         <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center px-3">
           <p className="rounded-full border border-border/70 bg-background/90 px-3 py-1 text-[10px] text-foreground shadow-lg backdrop-blur-md">
-            Drag over visible terminal text, then press Cmd/Ctrl+C or choose
-            Copy.
+            Drag over terminal text, then press Cmd+C or choose Copy.
           </p>
         </div>
       )}
@@ -253,8 +249,7 @@ export function TerminalPaneView({
           <button
             type="button"
             data-seq={"\x1b[A"}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={handleDpadButtonActivate}
+            onPointerDown={handleDpadButtonPointerDown}
             className={dpadButtonClass}
             aria-label="Arrow up"
           >
@@ -264,8 +259,7 @@ export function TerminalPaneView({
           <button
             type="button"
             data-seq={"\x1b[D"}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={handleDpadButtonActivate}
+            onPointerDown={handleDpadButtonPointerDown}
             className={dpadButtonClass}
             aria-label="Arrow left"
           >
@@ -274,8 +268,7 @@ export function TerminalPaneView({
           <button
             type="button"
             data-seq={"\x1b[B"}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={handleDpadButtonActivate}
+            onPointerDown={handleDpadButtonPointerDown}
             className={dpadButtonClass}
             aria-label="Arrow down"
           >
@@ -284,8 +277,7 @@ export function TerminalPaneView({
           <button
             type="button"
             data-seq={"\x1b[C"}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={handleDpadButtonActivate}
+            onPointerDown={handleDpadButtonPointerDown}
             className={dpadButtonClass}
             aria-label="Arrow right"
           >
@@ -310,7 +302,7 @@ export function TerminalPaneView({
               key={k.label}
               data-action={k.action}
               data-seq={k.seq}
-              onClick={handleQuickKeyActivate}
+              onPointerDown={handleQuickKeyPointerDown}
               className={keyBtnClass}
             >
               {k.label}
@@ -334,33 +326,23 @@ export function TerminalPaneView({
             type="button"
             onClick={copyTerminalSelection}
             disabled={!hasTerminalSelection}
+            aria-label="Copy selected terminal text"
+            aria-live="polite"
             className={cn(
               keyBtnClass,
-              "inline-flex w-[4.5rem] items-center justify-center gap-1",
+              "inline-flex w-[5.5rem] items-center justify-center gap-1",
               copyStatus === "copied" &&
                 "border-emerald-500/60 text-emerald-600 dark:text-emerald-400",
               copyStatus === "error" && "border-destructive text-destructive",
             )}
           >
             <Copy className="size-3" />
-            Copy
-          </button>
-          <span
-            role="status"
-            aria-live="polite"
-            className={cn(
-              "min-w-[4.5rem] text-[11px]",
-              copyStatus === "copied" &&
-                "text-emerald-600 dark:text-emerald-400",
-              copyStatus === "error" && "text-destructive",
-            )}
-          >
             {copyStatus === "copied"
               ? "Copied"
               : copyStatus === "error"
-                ? "Copy failed"
-                : ""}
-          </span>
+                ? "Try again"
+                : "Copy"}
+          </button>
         </div>
 
         {pendingAttachments.length > 0 && (
@@ -404,7 +386,7 @@ export function TerminalPaneView({
             variant="outline"
             size="icon"
             onClick={() => fileInputRef.current?.click()}
-            disabled={uploadStatus.state !== "idle" || isSubmittingInput}
+            disabled={uploadStatus.state !== "idle"}
             aria-label="Upload file"
             className="shrink-0"
           >
@@ -421,7 +403,6 @@ export function TerminalPaneView({
             value={inputValue}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            disabled={isSubmittingInput}
             placeholder="Paste or type here — keystrokes go live..."
             autoComplete="off"
             autoCorrect="off"
@@ -437,12 +418,11 @@ export function TerminalPaneView({
           <Button
             type="button"
             onClick={handleSubmit}
-            disabled={isSubmittingInput || uploadStatus.state !== "idle"}
             aria-label="Submit"
             className="shrink-0 px-4 py-2.5"
           >
             <CornerDownLeft className="size-4" />
-            Submit
+            Enter
           </Button>
         </div>
         {(uploadStatus.state !== "idle" || uploadError) && (
