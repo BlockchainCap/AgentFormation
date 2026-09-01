@@ -19,7 +19,7 @@ export async function getRuntimeForSubject(
   }
 
   const parsed = runtimeRecordSchema.safeParse(response.Item);
-  if (!parsed.success) {
+  if (!parsed.success || parsed.data.userSub !== userSub) {
     throw new Error("User registry record has an invalid shape");
   }
 

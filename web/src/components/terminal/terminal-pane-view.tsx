@@ -22,6 +22,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
+  getUploadStatusText,
+  type PendingAttachment,
+  type UploadStatus,
+} from "./terminal-api";
+import {
   DPAD_HEIGHT_PX,
   DPAD_WIDTH_PX,
   QUICK_KEYS,
@@ -30,12 +35,10 @@ import {
   TERMINAL_LINE_HEIGHT,
   TERMINAL_MAX_COLUMNS,
   TERMINAL_MAX_WIDTH_FACTOR,
-  getUploadStatusText,
   type ConnectionState,
   type DpadPosition,
-  type PendingAttachment,
-  type UploadStatus,
 } from "./terminal-shared";
+import type { TerminalCopyStatus } from "./use-terminal-text-selection";
 
 interface TerminalPaneViewProps {
   dpadPosition: DpadPosition | null;
@@ -63,7 +66,7 @@ interface TerminalPaneViewProps {
   isReviewingHistory: boolean;
   isTextSelectionMode: boolean;
   pendingAttachments: PendingAttachment[];
-  copyStatus: "idle" | "copied" | "error";
+  copyStatus: TerminalCopyStatus;
   copyTerminalSelection: () => void;
   reconnect: () => void;
   removePendingAttachment: (attachmentId: string) => void;
@@ -155,7 +158,8 @@ export function TerminalPaneView({
           />
           {isConnected && isTextSelectionMode && (
             <div
-              className="absolute inset-2 z-10 cursor-text touch-none"
+              className="terminal-selection-surface absolute inset-2 z-10 cursor-text touch-none outline-none"
+              tabIndex={-1}
               onPointerDown={handleSelectionPointerDown}
               onPointerMove={handleSelectionPointerMove}
               onPointerUp={handleSelectionPointerUp}
@@ -294,6 +298,7 @@ export function TerminalPaneView({
         <div className="flex flex-wrap items-center gap-1 px-2 py-1.5">
           {QUICK_KEYS.map((k) => (
             <button
+              type="button"
               key={k.label}
               data-action={k.action}
               data-seq={k.seq}

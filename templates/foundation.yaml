@@ -5,18 +5,26 @@ Parameters:
   DeploymentName:
     Type: String
     Default: agentformation
-    AllowedPattern: '^[a-z][a-z0-9-]{2,31}$'
+    AllowedPattern: '^(?!.*-runtime-)[a-z][a-z0-9-]{2,31}$'
   CognitoDomainPrefix:
     Type: String
     AllowedPattern: '^[a-z0-9][a-z0-9-]{2,62}$'
   InitialCallbackUrl:
     Type: String
-    Default: http://localhost:3000/api/auth/callback/cognito
-    AllowedPattern: '^https?://[^ ]+$'
+    Default: https://localhost/api/auth/callback/cognito
+    AllowedPattern: '^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/api/auth/callback/cognito$'
   InitialLogoutUrl:
     Type: String
-    Default: http://localhost:3000/
-    AllowedPattern: '^https?://[^ ]+$'
+    Default: https://localhost/
+    AllowedPattern: '^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/$'
+  UploadAllowedOrigin:
+    Type: String
+    Default: https://localhost
+    AllowedPattern: '^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$'
+  ConfigureIdentityCenterClient:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
   ConfigureCaseInsensitiveUsernames:
     Type: String
     Default: 'true'
@@ -24,6 +32,7 @@ Parameters:
 
 Conditions:
   UseCaseInsensitiveUsernames: !Equals [!Ref ConfigureCaseInsensitiveUsernames, 'true']
+  IdentityCenterClientEnabled: !Equals [!Ref ConfigureIdentityCenterClient, 'true']
 
 Resources:
   UserPool:
@@ -50,6 +59,7 @@ Resources:
 
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
+    Condition: IdentityCenterClientEnabled
     Properties:
       ClientName: !Sub '${AWS::StackName}-web'
       UserPoolId: !Ref UserPool
@@ -58,6 +68,7 @@ Resources:
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [code]
       AllowedOAuthScopes: [openid, email, profile]
+      SupportedIdentityProviders: [IdentityCenter]
       CallbackURLs: [!Ref InitialCallbackUrl]
       LogoutURLs: [!Ref InitialLogoutUrl]
       PreventUserExistenceErrors: ENABLED
@@ -89,6 +100,32 @@ Resources:
         PointInTimeRecoveryEnabled: true
       SSESpecification:
         SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
+  ControlState:
+    Type: AWS::DynamoDB::Table
+    Metadata:
+      checkov:
+        skip:
+          - id: CKV_AWS_119
+            comment: This table contains short-lived counters and claims only; AWS-managed encryption avoids a customer-key lifecycle for disposable coordination data.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: controlKey, AttributeType: S }
+      KeySchema:
+        - { AttributeName: controlKey, KeyType: HASH }
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
       Tags:
         - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
 
@@ -104,6 +141,13 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: [content-type]
+            AllowedMethods: [POST]
+            AllowedOrigins: [!Ref UploadAllowedOrigin]
+            ExposedHeaders: [ETag]
+            MaxAge: 300
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
@@ -121,6 +165,13 @@ Resources:
             Prefix: uploads/
             ExpirationInDays: 1
             AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
+          - Id: ExpireOldProvisioningTemplates
+            Status: Enabled
+            Prefix: provisioning/
+            TagFilters:
+              - Key: agentformation-lifecycle
+                Value: superseded
+            ExpirationInDays: 30
       Tags:
         - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
 
@@ -220,10 +271,186 @@ Resources:
       Tags:
         - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
 
+  UploadDeliveryDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: !Sub '${AWS::StackName}-upload-delivery'
+      DocumentType: Command
+      UpdateMethod: NewVersion
+      Content:
+        schemaVersion: '2.2'
+        description: Deliver one sealed upload to its assigned AgentFormation runtime.
+        parameters:
+          UploadBucket:
+            type: String
+            allowedPattern: '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
+            interpolationType: ENV_VAR
+          UserSubject:
+            type: String
+            allowedPattern: '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+            interpolationType: ENV_VAR
+          UploadId:
+            type: String
+            allowedPattern: '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+            interpolationType: ENV_VAR
+          Filename:
+            type: String
+            allowedPattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$'
+            interpolationType: ENV_VAR
+          TmuxSession:
+            type: String
+            allowedPattern: '^[A-Za-z0-9_-]{1,32}$'
+            interpolationType: ENV_VAR
+          FileSize:
+            type: String
+            allowedPattern: '^[1-9][0-9]{0,7}$'
+            interpolationType: ENV_VAR
+        mainSteps:
+          - action: aws:runShellScript
+            name: deliverUpload
+            inputs:
+              timeoutSeconds: '60'
+              runCommand:
+                - |
+                  exec /bin/bash -euo pipefail <<'AGENTFORMATION_UPLOAD'
+                  : "${SSM_UploadBucket:?missing UploadBucket}"
+                  : "${SSM_UserSubject:?missing UserSubject}"
+                  : "${SSM_UploadId:?missing UploadId}"
+                  : "${SSM_Filename:?missing Filename}"
+                  : "${SSM_TmuxSession:?missing TmuxSession}"
+                  : "${SSM_FileSize:?missing FileSize}"
+                  /usr/local/bin/node - /workspace/.uploads /home/agentformation <<'NODE'
+                  const fs = require("node:fs");
+                  const [uploadsDirectory, runtimeHome] = process.argv.slice(2);
+                  try {
+                    fs.mkdirSync(uploadsDirectory, { mode: 0o700 });
+                  } catch (error) {
+                    if (error?.code !== "EEXIST") throw error;
+                  }
+                  const directory = fs.openSync(
+                    uploadsDirectory,
+                    fs.constants.O_RDONLY |
+                      fs.constants.O_DIRECTORY |
+                      fs.constants.O_NOFOLLOW,
+                  );
+                  try {
+                    const runtimeUser = fs.statSync(runtimeHome);
+                    fs.fchownSync(directory, runtimeUser.uid, runtimeUser.gid);
+                    fs.fchmodSync(directory, 0o700);
+                  } finally {
+                    fs.closeSync(directory);
+                  }
+                  NODE
+                  runuser --user agentformation -- /bin/bash -euo pipefail -c '
+                    upload_bucket="$1"
+                    user_subject="$2"
+                    upload_id="$3"
+                    filename="$4"
+                    tmux_session="$5"
+                    file_size="$6"
+                    destination_directory="/workspace/.uploads/${upload_id}"
+                    destination="${destination_directory}/${filename}"
+                    object_uri="s3://${upload_bucket}/uploads/${user_subject}/${upload_id}/sealed/${filename}"
+                    /usr/bin/tmux has-session -t "$tmux_session"
+                    install -d -m 0700 -- "$destination_directory"
+                    partial_file="$(mktemp --tmpdir="$destination_directory" ".${filename}.XXXXXX.part")"
+                    trap '\''rm -f -- "$partial_file"'\'' EXIT
+                    chmod 0600 -- "$partial_file"
+                    env HOME=/home/agentformation /usr/local/bin/aws s3 cp "$object_uri" "$partial_file" --only-show-errors
+                    test "$(stat -c %s -- "$partial_file")" -eq "$file_size"
+                    mv -f -- "$partial_file" "$destination"
+                    trap - EXIT
+                  ' agentformation "$SSM_UploadBucket" "$SSM_UserSubject" "$SSM_UploadId" "$SSM_Filename" "$SSM_TmuxSession" "$SSM_FileSize"
+                  AGENTFORMATION_UPLOAD
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
+  OAuthRelayDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: !Sub '${AWS::StackName}-oauth-relay'
+      DocumentType: Command
+      UpdateMethod: NewVersion
+      Content:
+        schemaVersion: '2.2'
+        description: Relay one staged OAuth loopback callback inside its assigned AgentFormation runtime.
+        parameters:
+          UploadBucket:
+            type: String
+            allowedPattern: '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
+            interpolationType: ENV_VAR
+          UserSubject:
+            type: String
+            allowedPattern: '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+            interpolationType: ENV_VAR
+          RelayId:
+            type: String
+            allowedPattern: '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+            interpolationType: ENV_VAR
+        mainSteps:
+          - action: aws:runShellScript
+            name: relayOAuthCallback
+            inputs:
+              timeoutSeconds: '15'
+              runCommand:
+                - |
+                  exec /bin/bash -euo pipefail <<'AGENTFORMATION_OAUTH'
+                  : "${SSM_UploadBucket:?missing UploadBucket}"
+                  : "${SSM_UserSubject:?missing UserSubject}"
+                  : "${SSM_RelayId:?missing RelayId}"
+                  object_uri="s3://${SSM_UploadBucket}/uploads/${SSM_UserSubject}/${SSM_RelayId}/oauth-callback.url"
+                  /usr/local/bin/aws s3 cp "$object_uri" - --only-show-errors |
+                    /usr/sbin/runuser --user agentformation -- /usr/local/bin/node -e '
+                      const chunks = [];
+                      let size = 0;
+                      process.stdin.on("data", (chunk) => {
+                        size += chunk.length;
+                        if (size > 4096) process.exit(1);
+                        chunks.push(chunk);
+                      });
+                      process.stdin.on("end", () => {
+                        const payload = Buffer.concat(chunks, size);
+                        const value = payload.toString("utf8");
+                        try {
+                          const url = new URL(value);
+                          const port = Number(url.port);
+                          if (
+                            !Buffer.from(value, "utf8").equals(payload) ||
+                            /[\u0000-\u001f\u007f]/.test(value) ||
+                            url.protocol !== "http:" ||
+                            url.hostname !== "127.0.0.1" ||
+                            url.username ||
+                            url.password ||
+                            !/^\d+$/.test(url.port) ||
+                            !Number.isInteger(port) ||
+                            port < 1 ||
+                            port > 65535 ||
+                            !/^\/callback(?:\/[A-Za-z0-9_-]{8,128})?$/.test(url.pathname) ||
+                            !url.search ||
+                            url.hash ||
+                            url.href !== value
+                          ) {
+                            process.exit(1);
+                          }
+                          const escaped = value
+                            .replaceAll("\\", "\\\\")
+                            .replaceAll("\"", "\\\"");
+                          process.stdout.write(`url = "${escaped}"\n`);
+                        } catch {
+                          process.exit(1);
+                        }
+                      });
+                    ' |
+                    /usr/sbin/runuser --user agentformation -- /usr/bin/curl --disable --config - --interface 127.0.0.1 --proto '=http' --noproxy '*' --fail --silent --show-error --output /dev/null --max-time 5 --max-filesize 65536
+                  AGENTFORMATION_OAUTH
+      Tags:
+        - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
+
 Outputs:
   UserPoolId:
     Value: !Ref UserPool
   UserPoolClientId:
+    Condition: IdentityCenterClientEnabled
     Value: !Ref UserPoolClient
   CognitoIssuer:
     Value: !Sub 'https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${UserPool}'
@@ -235,6 +462,8 @@ Outputs:
     Value: !Sub 'urn:amazon:cognito:sp:${UserPool}'
   UserRegistryTableName:
     Value: !Ref UserRegistry
+  ControlTableName:
+    Value: !Ref ControlState
   UploadBucketName:
     Value: !Ref UploadBucket
   WebRepositoryUri:
@@ -247,3 +476,7 @@ Outputs:
     Value: !Ref CognitoClientSecret
   TerminalSessionDocumentName:
     Value: !Ref TerminalSessionDocument
+  UploadDeliveryDocumentName:
+    Value: !Ref UploadDeliveryDocument
+  OAuthRelayDocumentName:
+    Value: !Ref OAuthRelayDocument

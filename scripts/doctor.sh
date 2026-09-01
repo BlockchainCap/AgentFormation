@@ -9,7 +9,7 @@ docker buildx version >/dev/null || fail "Docker buildx is required"
 require_config
 
 say "Checking local configuration"
-config '.deploymentName | test("^[a-z][a-z0-9-]{2,31}$")' >/dev/null
+config '.deploymentName | test("^[a-z][a-z0-9-]{2,31}$") and (contains("-runtime-") | not)' >/dev/null
 config '(.publicUrl // "") | type == "string" and (. == "" or test("^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$"))' >/dev/null
 config '.networkMode == "private-nat" or .networkMode == "private-endpoints"' >/dev/null
 config '(.identityCenter.metadataUrl // "") | type == "string" and (. == "" or test("^https://[^[:space:]]+$"))' >/dev/null

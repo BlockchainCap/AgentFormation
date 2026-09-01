@@ -1,12 +1,14 @@
 import { Buffer } from "node:buffer";
 import { NextRequest, NextResponse } from "next/server";
 import { contentSecurityPolicy } from "@/lib/content-security-policy";
+import { getAwsRegion, getUploadBucketName } from "@/lib/env";
 
 export function proxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const policy = contentSecurityPolicy(
     nonce,
-    process.env.AWS_REGION?.trim() || "us-east-1",
+    getAwsRegion(),
+    getUploadBucketName(),
     process.env.NODE_ENV !== "production",
   );
   const requestHeaders = new Headers(request.headers);

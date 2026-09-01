@@ -1,9 +1,13 @@
 export function contentSecurityPolicy(
   nonce: string,
   awsRegion: string,
+  uploadBucket: string,
   isDevelopment: boolean,
 ): string {
   const developmentScriptSource = isDevelopment ? " 'unsafe-eval'" : "";
+  const awsUrlSuffix = awsRegion.startsWith("cn-")
+    ? "amazonaws.com.cn"
+    : "amazonaws.com";
 
   return [
     "default-src 'self'",
@@ -11,7 +15,7 @@ export function contentSecurityPolicy(
     "script-src-attr 'none'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
-    `connect-src 'self' wss://ssmmessages.${awsRegion}.amazonaws.com https://*.s3.${awsRegion}.amazonaws.com https://*.s3.amazonaws.com`,
+    `connect-src 'self' wss://ssmmessages.${awsRegion}.${awsUrlSuffix} https://${uploadBucket}.s3.${awsRegion}.${awsUrlSuffix} https://${uploadBucket}.s3.${awsUrlSuffix}`,
     "font-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",

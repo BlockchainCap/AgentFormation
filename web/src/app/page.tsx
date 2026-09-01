@@ -1,13 +1,14 @@
 import { redirect } from "next/navigation";
-import { LogOut, ShieldCheck, TerminalSquare } from "lucide-react";
+import { ShieldCheck, TerminalSquare } from "lucide-react";
 import { EnvironmentSetup } from "@/components/environment-setup";
 import { MobileTerminal } from "@/components/mobile-terminal";
 import { OAuthCallbackAction } from "@/components/oauth-callback-action";
+import { SignOutAction } from "@/components/sign-out-action";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { cachedAuth, signIn, signOut } from "@/lib/auth";
 import { getRuntimeForSubject } from "@/lib/registry";
-import { isActiveRuntime } from "@/lib/runtime-access";
+import { isActiveRuntime, isRuntimeAccessRevoked } from "@/lib/runtime-access";
 
 function SignInPage() {
   return (
@@ -51,11 +52,11 @@ export default async function Home() {
   if (!session?.user?.id || !session.user.email) return <SignInPage />;
 
   const runtime = await getRuntimeForSubject(session.user.id);
-  if (runtime?.status === "disabled")
+  if (isRuntimeAccessRevoked(runtime))
     redirect("/auth-error?error=AccessDenied");
 
   return (
-    <div className="flex h-dvh flex-col">
+    <div id="agentformation-app-shell" className="flex h-dvh flex-col">
       <header className="flex shrink-0 items-center justify-between border-b border-border bg-card px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
         <div className="min-w-0 space-y-0.5">
           <p className="truncate text-xs font-semibold text-foreground">
@@ -70,23 +71,12 @@ export default async function Home() {
         <div className="flex shrink-0 items-center gap-0.5">
           {isActiveRuntime(runtime) ? <OAuthCallbackAction /> : null}
           <ThemeToggle />
-          <form
+          <SignOutAction
             action={async () => {
               "use server";
               await signOut({ redirectTo: "/" });
             }}
-          >
-            <Button
-              type="submit"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Sign out"
-              title="Sign out"
-              className="text-muted-foreground"
-            >
-              <LogOut className="size-3.5" />
-            </Button>
-          </form>
+          />
         </div>
       </header>
       {isActiveRuntime(runtime) ? (

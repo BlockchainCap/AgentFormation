@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { requireSameOriginJson } from "./request-security";
+import {
+  MAX_JSON_BODY_BYTES,
+  readJsonBody,
+  requireSameOriginJson,
+} from "./request-security";
 
 const PUBLIC_ORIGIN = "https://agentformation.example";
 
@@ -66,5 +70,64 @@ describe("requireSameOriginJson", () => {
         }),
       ),
     ).toThrowError(expect.objectContaining({ status: 415 }));
+  });
+});
+
+describe("readJsonBody", () => {
+  it("parses a bounded JSON request", async () => {
+    const body = await readJsonBody(
+      new Request(`${PUBLIC_ORIGIN}/api/session/start`, {
+        method: "POST",
+        body: JSON.stringify({ ok: true }),
+      }),
+    );
+
+    expect(body).toEqual({ ok: true });
+  });
+
+  it("rejects a declared oversized request before reading it", async () => {
+    await expect(
+      readJsonBody(
+        new Request(`${PUBLIC_ORIGIN}/api/session/start`, {
+          method: "POST",
+          headers: { "content-length": String(MAX_JSON_BODY_BYTES + 1) },
+          body: "{}",
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 413 });
+  });
+
+  it("rejects a malformed declared content length", async () => {
+    await expect(
+      readJsonBody(
+        new Request(`${PUBLIC_ORIGIN}/api/session/start`, {
+          method: "POST",
+          headers: { "content-length": "2bytes" },
+          body: "{}",
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects a streamed request that exceeds the limit", async () => {
+    await expect(
+      readJsonBody(
+        new Request(`${PUBLIC_ORIGIN}/api/session/start`, {
+          method: "POST",
+          body: JSON.stringify({ value: "x".repeat(MAX_JSON_BODY_BYTES) }),
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 413 });
+  });
+
+  it("returns a controlled error for malformed JSON", async () => {
+    await expect(
+      readJsonBody(
+        new Request(`${PUBLIC_ORIGIN}/api/session/start`, {
+          method: "POST",
+          body: "{",
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 400 });
   });
 });

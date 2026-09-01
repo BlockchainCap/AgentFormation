@@ -4,16 +4,18 @@ Description: One private, persistent AgentFormation runtime assigned to one fede
 Parameters:
   DeploymentName:
     Type: String
-    AllowedPattern: '^[a-z][a-z0-9-]{2,31}$'
+    AllowedPattern: '^(?!.*-runtime-)[a-z][a-z0-9-]{2,31}$'
   RuntimeSubnetId:
     Type: AWS::EC2::Subnet::Id
   RuntimeSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
+  RuntimePermissionsBoundaryArn:
+    Type: String
+    AllowedPattern: '^arn:[A-Za-z0-9-]+:iam::[0-9]{12}:policy/[A-Za-z0-9+=,.@_/-]+$'
   UserSubject:
     Type: String
     NoEcho: true
-    MinLength: 8
-    MaxLength: 128
+    AllowedPattern: '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
   AmiId:
     Type: AWS::EC2::Image::Id
   InstanceType:
@@ -36,9 +38,10 @@ Parameters:
     AllowedPattern: '^[A-Za-z0-9._:/-]+$'
   ClaudeInferenceProfileArn:
     Type: String
-    MinLength: 20
+    AllowedPattern: '^arn:[A-Za-z0-9-]+:bedrock:[A-Za-z0-9-]+:([0-9]{12})?:(inference-profile|application-inference-profile)/[A-Za-z0-9._:-]+$'
   ClaudeFoundationModelArns:
     Type: CommaDelimitedList
+    AllowedPattern: '^arn:[A-Za-z0-9-]+:bedrock:[A-Za-z0-9-]+::foundation-model/[A-Za-z0-9._:-]+$'
   CodexModelId:
     Type: String
     MinLength: 1
@@ -46,7 +49,7 @@ Parameters:
     AllowedPattern: '^[A-Za-z0-9._:/-]+$'
   UploadBucketName:
     Type: String
-    MinLength: 3
+    AllowedPattern: '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
 
 Rules:
   MatchArchitectureAndRuntime:
@@ -71,8 +74,9 @@ Resources:
           - Effect: Allow
             Principal: { Service: ec2.amazonaws.com }
             Action: sts:AssumeRole
+      PermissionsBoundary: !Ref RuntimePermissionsBoundaryArn
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
       Policies:
         - PolicyName: InvokeConfiguredBedrockModels
           PolicyDocument:

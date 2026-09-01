@@ -2,11 +2,13 @@
 
 import {
   useEffect,
+  useEffectEvent,
   type Dispatch,
   type RefObject,
   type SetStateAction,
 } from "react";
 import type { Terminal } from "@xterm/xterm";
+import { beaconTerminateSession, type SessionInfo } from "./terminal-api";
 import {
   TERMINAL_GESTURE_LOCK_PX,
   TERMINAL_TOUCH_SCROLL_LINE_PX,
@@ -16,11 +18,9 @@ import {
   getDominantScrollAxis,
   getTerminalUrlAtPoint,
   openTerminalUrl,
-  terminateSession,
   type ConnectMode,
   type ConnectionState,
   type DpadPosition,
-  type SessionInfo,
   type TerminalScrollAxis,
 } from "./terminal-shared";
 
@@ -28,13 +28,8 @@ interface TerminalPaneEffectsProps {
   connect: (mode?: ConnectMode) => Promise<void>;
   dpadPosition: DpadPosition | null;
   isActive: boolean;
-  isConnected: boolean;
   reconnectIfNeeded: () => void;
-  resetTransport: (options?: {
-    clearSession?: boolean;
-    disposeTerminal?: boolean;
-    terminateSession?: boolean;
-  }) => void;
+  resetTransport: (mode: "fresh" | "resume" | "unmount") => void;
   scheduleTerminalSizeBurst: () => void;
   scrollRef: RefObject<HTMLDivElement | null>;
   sessionRef: RefObject<SessionInfo | null>;
@@ -50,7 +45,6 @@ export function useTerminalPaneEffects({
   connect,
   dpadPosition,
   isActive,
-  isConnected,
   reconnectIfNeeded,
   resetTransport,
   scheduleTerminalSizeBurst,
@@ -147,12 +141,12 @@ export function useTerminalPaneEffects({
   }, [isActive, scheduleTerminalSizeBurst, state]);
 
   useEffect(() => {
-    if (!isActive || !isConnected || dpadPosition) return;
+    if (!isActive || state !== "connected" || dpadPosition) return;
     const frame = window.requestAnimationFrame(() => {
       setDpadPosition(getDefaultDpadPosition());
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [dpadPosition, isActive, isConnected, setDpadPosition]);
+  }, [dpadPosition, isActive, setDpadPosition, state]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -185,6 +179,7 @@ export function useTerminalPaneEffects({
     let touchLastY = 0;
     let touchResidualY = 0;
     let touchAxis: TerminalScrollAxis | null = null;
+    let hasTrackedTouch = false;
     const scrollTerminalLines = (
       lines: number,
       clientX: number,
@@ -212,7 +207,8 @@ export function useTerminalPaneEffects({
     };
 
     const handleTouchStart = (event: TouchEvent) => {
-      if (event.touches.length !== 1) return;
+      hasTrackedTouch = event.touches.length === 1;
+      if (!hasTrackedTouch) return;
 
       touchStartX = event.touches[0].clientX;
       touchStartY = event.touches[0].clientY;
@@ -223,7 +219,10 @@ export function useTerminalPaneEffects({
     };
 
     const handleTouchMove = (event: TouchEvent) => {
-      if (event.touches.length !== 1) return;
+      if (!hasTrackedTouch || event.touches.length !== 1) {
+        hasTrackedTouch = false;
+        return;
+      }
 
       const nextX = event.touches[0].clientX;
       const nextY = event.touches[0].clientY;
@@ -263,7 +262,7 @@ export function useTerminalPaneEffects({
     };
 
     const handleTouchEnd = () => {
-      if (!touchAxis) {
+      if (hasTrackedTouch && !touchAxis) {
         const terminal = terminalRef.current;
         const terminalContainer = termRef.current;
         if (terminal && terminalContainer) {
@@ -279,6 +278,14 @@ export function useTerminalPaneEffects({
 
       touchResidualY = 0;
       touchAxis = null;
+      hasTrackedTouch = false;
+      scrollContainer.classList.remove("terminal-touch-scrolling");
+    };
+
+    const handleTouchCancel = () => {
+      touchResidualY = 0;
+      touchAxis = null;
+      hasTrackedTouch = false;
       scrollContainer.classList.remove("terminal-touch-scrolling");
     };
 
@@ -293,7 +300,7 @@ export function useTerminalPaneEffects({
     scrollContainer.addEventListener("touchend", handleTouchEnd, {
       capture: true,
     });
-    scrollContainer.addEventListener("touchcancel", handleTouchEnd, {
+    scrollContainer.addEventListener("touchcancel", handleTouchCancel, {
       capture: true,
     });
 
@@ -307,51 +314,48 @@ export function useTerminalPaneEffects({
       scrollContainer.removeEventListener("touchend", handleTouchEnd, {
         capture: true,
       });
-      scrollContainer.removeEventListener("touchcancel", handleTouchEnd, {
+      scrollContainer.removeEventListener("touchcancel", handleTouchCancel, {
         capture: true,
       });
       scrollContainer.classList.remove("terminal-touch-scrolling");
     };
-  }, [
-    isActive,
-    scrollRef,
-    state,
-    termRef,
-    terminalRef,
-    updateTerminalReviewState,
-  ]);
+  }, [isActive, scrollRef, termRef, terminalRef, updateTerminalReviewState]);
 
-  // Auto-connect on mount; resume after mobile browser suspends the page.
+  const startConnection = useEffectEvent(() => connect("start"));
+  const reconnectAfterResume = useEffectEvent(() => reconnectIfNeeded());
+  const terminateBeforeUnload = useEffectEvent(() => {
+    const activeSession = sessionRef.current;
+    if (activeSession?.sessionId && activeSession.terminateToken) {
+      beaconTerminateSession(
+        activeSession.sessionId,
+        activeSession.terminateToken,
+      );
+    }
+  });
+  const unmountConnection = useEffectEvent(() => resetTransport("unmount"));
+
+  // Keep the live attachment while mobile browsers background the page. This
+  // preserves tmux input and shared scrolling across every attached browser.
   useEffect(() => {
-    void connect("start");
+    void startConnection().catch(() => {
+      // connect reports a user-safe error and owns its cleanup path.
+    });
 
-    const handleBeforeUnload = () => {
-      const activeSession = sessionRef.current;
-      if (activeSession?.sessionId && activeSession.terminateToken) {
-        terminateSession(activeSession.sessionId, activeSession.terminateToken);
-      }
-    };
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        reconnectIfNeeded();
+        reconnectAfterResume();
       }
     };
-    const handlePageShow = () => {
-      reconnectIfNeeded();
-    };
+    const handlePageShow = () => reconnectAfterResume();
 
-    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("beforeunload", terminateBeforeUnload);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pageshow", handlePageShow);
     return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("beforeunload", terminateBeforeUnload);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pageshow", handlePageShow);
-      resetTransport({
-        clearSession: true,
-        disposeTerminal: true,
-        terminateSession: true,
-      });
+      unmountConnection();
     };
-  }, [connect, reconnectIfNeeded, resetTransport, sessionRef]);
+  }, []);
 }

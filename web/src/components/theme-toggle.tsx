@@ -8,7 +8,12 @@ const subscribeToHydration = () => () => undefined;
 
 function ReadyThemeToggle() {
   const [dark, setDark] = useState(() => {
-    const stored = localStorage.getItem("theme");
+    let stored: string | null = null;
+    try {
+      stored = localStorage.getItem("theme");
+    } catch {
+      // Keep the server-rendered dark theme when storage is unavailable.
+    }
     if (stored === "light") {
       document.documentElement.classList.remove("dark");
       return false;
@@ -20,7 +25,11 @@ function ReadyThemeToggle() {
     const next = !dark;
     setDark(next);
     document.documentElement.classList.toggle("dark", next);
-    localStorage.setItem("theme", next ? "dark" : "light");
+    try {
+      localStorage.setItem("theme", next ? "dark" : "light");
+    } catch {
+      // Theme switching still works for the current page without persistence.
+    }
   }
 
   return (

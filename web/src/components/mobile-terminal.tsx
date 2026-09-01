@@ -8,8 +8,10 @@ import { TerminalPane } from "@/components/terminal/terminal-pane";
 import {
   TerminalTab,
   MobileTerminalProps,
+  MAX_TERMINAL_TABS,
   RECENT_CLOSED_TABS_LIMIT,
-  createTerminalTab,
+  TERMINAL_STORAGE_PREFIX,
+  createFreshTerminalTab,
   loadStoredTerminalState,
   useHydrated,
 } from "@/components/terminal/terminal-shared";
@@ -21,7 +23,7 @@ function ReadyMobileTerminal({ storageKey }: { storageKey: string }) {
     initialState.closedTabs,
   );
   const [activeTabId, setActiveTabId] = useState(initialState.activeTabId);
-  const [nextTabIndex, setNextTabIndex] = useState(initialState.nextTabIndex);
+  const nextTabLabelIndexRef = useRef(initialState.nextTabLabelIndex);
   const [mountedTabIds, setMountedTabIds] = useState<string[]>(
     initialState.mountedTabIds,
   );
@@ -53,25 +55,31 @@ function ReadyMobileTerminal({ storageKey }: { storageKey: string }) {
     () => tabs.find((tab) => tab.id === renamingTabId) ?? null,
     [renamingTabId, tabs],
   );
+  const modalOpen =
+    showNewTabChooser || renamingTab !== null || pendingCloseTab !== null;
 
   useEffect(() => {
     if (!activeTab) return;
 
-    window.localStorage.setItem(
-      storageKey,
-      JSON.stringify({
-        activeTabId: activeTab.id,
-        closedTabs,
-        nextTabIndex,
-        tabs,
-      }),
-    );
-  }, [activeTab, closedTabs, nextTabIndex, storageKey, tabs]);
+    try {
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          activeTabId: activeTab.id,
+          closedTabs,
+          tabs,
+        }),
+      );
+    } catch {
+      // The terminal remains usable when browser storage is unavailable or full.
+    }
+  }, [activeTab, closedTabs, storageKey, tabs]);
 
   const createFreshTab = useCallback(() => {
-    const nextTab = createTerminalTab(nextTabIndex);
-    setTabs([...tabs, nextTab]);
-    setNextTabIndex(nextTabIndex + 1);
+    if (tabs.length >= MAX_TERMINAL_TABS) return;
+    const nextTab = createFreshTerminalTab(nextTabLabelIndexRef.current);
+    nextTabLabelIndexRef.current += 1;
+    setTabs((currentTabs) => [...currentTabs, nextTab]);
     setMountedTabIds((currentIds) => [...currentIds, nextTab.id]);
     newTabDraftRef.current = {
       tabId: nextTab.id,
@@ -81,24 +89,27 @@ function ReadyMobileTerminal({ storageKey }: { storageKey: string }) {
     setShowNewTabChooser(false);
     setRenamingTabId(nextTab.id);
     setRenameValue(nextTab.label);
-  }, [activeTab.id, nextTabIndex, tabs]);
+  }, [activeTab.id, tabs.length]);
 
   const addTab = useCallback(() => {
+    if (tabs.length >= MAX_TERMINAL_TABS) return;
     if (closedTabs.length > 0) {
       setShowNewTabChooser(true);
       return;
     }
 
     createFreshTab();
-  }, [closedTabs.length, createFreshTab]);
+  }, [closedTabs.length, createFreshTab, tabs.length]);
 
   const reopenClosedTab = useCallback(
     (tabId: string) => {
       const tabToReopen = closedTabs.find((tab) => tab.id === tabId);
-      if (!tabToReopen) return;
+      if (!tabToReopen || tabs.length >= MAX_TERMINAL_TABS) return;
 
-      setClosedTabs(closedTabs.filter((tab) => tab.id !== tabId));
-      setTabs([...tabs, tabToReopen]);
+      setClosedTabs((currentClosedTabs) =>
+        currentClosedTabs.filter((tab) => tab.id !== tabId),
+      );
+      setTabs((currentTabs) => [...currentTabs, tabToReopen]);
       setMountedTabIds((currentIds) =>
         currentIds.includes(tabId) ? currentIds : [...currentIds, tabId],
       );
@@ -227,91 +238,105 @@ function ReadyMobileTerminal({ storageKey }: { storageKey: string }) {
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-end gap-1 border-b border-border bg-muted/40 px-2 pt-1.5">
-        <div className="no-scrollbar flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto">
+      <div
+        className="contents"
+        inert={modalOpen ? true : undefined}
+        aria-hidden={modalOpen || undefined}
+      >
+        <div className="flex shrink-0 items-end gap-1 border-b border-border bg-muted/40 px-2 pt-1.5">
+          <div className="no-scrollbar flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto">
+            {tabs.map((tab) => {
+              const isActive = tab.id === activeTab.id;
+              const isMounted = mountedTabIdSet.has(tab.id);
+
+              return (
+                <div
+                  key={tab.id}
+                  className={cn(
+                    "group flex h-9 max-w-40 shrink-0 items-center rounded-t-lg border border-b-0 text-xs shadow-sm transition-colors",
+                    isActive
+                      ? "relative -mb-px border-border bg-background text-foreground"
+                      : "border-transparent bg-secondary/70 text-muted-foreground active:bg-secondary",
+                  )}
+                >
+                  <button
+                    type="button"
+                    onPointerDown={() => handleTabPointerDown(tab)}
+                    onPointerUp={clearLongPressTimeout}
+                    onPointerCancel={clearLongPressTimeout}
+                    onPointerLeave={clearLongPressTimeout}
+                    onDoubleClick={() => beginRenameTab(tab)}
+                    onClick={() => selectTab(tab.id)}
+                    className="min-w-0 flex-1 truncate px-3 py-2 text-left font-medium"
+                    aria-current={isActive ? "page" : undefined}
+                    title={`${tab.label} (${tab.tmuxSession})`}
+                  >
+                    {tab.label}
+                  </button>
+                  <span
+                    className={cn(
+                      "mr-1 size-1.5 shrink-0 rounded-full",
+                      isMounted ? "bg-emerald-500" : "bg-muted-foreground/35",
+                    )}
+                    aria-hidden="true"
+                  />
+                  {tabs.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => requestCloseTab(tab.id)}
+                      className={cn(
+                        "mr-1 rounded p-1 transition-colors",
+                        isActive
+                          ? "text-muted-foreground active:bg-muted"
+                          : "text-muted-foreground/70 active:bg-secondary",
+                      )}
+                      aria-label={`Close ${tab.label}`}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={addTab}
+            disabled={tabs.length >= MAX_TERMINAL_TABS}
+            aria-label="New terminal tab"
+            title={
+              tabs.length >= MAX_TERMINAL_TABS
+                ? `Maximum of ${MAX_TERMINAL_TABS} terminal tabs reached`
+                : "New terminal tab"
+            }
+            className="mb-1 size-7 shrink-0 rounded-full"
+          >
+            <Plus className="size-3.5" />
+          </Button>
+        </div>
+
+        <div className="relative min-h-0 flex-1">
           {tabs.map((tab) => {
+            if (!mountedTabIdSet.has(tab.id)) return null;
+
             const isActive = tab.id === activeTab.id;
-            const isMounted = mountedTabIdSet.has(tab.id);
 
             return (
               <div
                 key={tab.id}
-                className={cn(
-                  "group flex h-9 max-w-40 shrink-0 items-center rounded-t-lg border border-b-0 text-xs shadow-sm transition-colors",
-                  isActive
-                    ? "relative -mb-px border-border bg-background text-foreground"
-                    : "border-transparent bg-secondary/70 text-muted-foreground active:bg-secondary",
-                )}
+                className={cn("absolute inset-0", !isActive && "hidden")}
+                aria-hidden={!isActive}
               >
-                <button
-                  type="button"
-                  onPointerDown={() => handleTabPointerDown(tab)}
-                  onPointerUp={clearLongPressTimeout}
-                  onPointerCancel={clearLongPressTimeout}
-                  onPointerLeave={clearLongPressTimeout}
-                  onDoubleClick={() => beginRenameTab(tab)}
-                  onClick={() => selectTab(tab.id)}
-                  className="min-w-0 flex-1 truncate px-3 py-2 text-left font-medium"
-                  aria-current={isActive ? "page" : undefined}
-                  title={`${tab.label} (${tab.tmuxSession})`}
-                >
-                  {tab.label}
-                </button>
-                <span
-                  className={cn(
-                    "mr-1 size-1.5 shrink-0 rounded-full",
-                    isMounted ? "bg-emerald-500" : "bg-muted-foreground/35",
-                  )}
-                  aria-hidden="true"
+                <TerminalPane
+                  tmuxSession={tab.tmuxSession}
+                  isActive={isActive}
                 />
-                {tabs.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => requestCloseTab(tab.id)}
-                    className={cn(
-                      "mr-1 rounded p-1 transition-colors",
-                      isActive
-                        ? "text-muted-foreground active:bg-muted"
-                        : "text-muted-foreground/70 active:bg-secondary",
-                    )}
-                    aria-label={`Close ${tab.label}`}
-                  >
-                    <X className="size-3" />
-                  </button>
-                )}
               </div>
             );
           })}
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          onClick={addTab}
-          aria-label="New terminal tab"
-          title="New terminal tab"
-          className="mb-1 size-7 shrink-0 rounded-full"
-        >
-          <Plus className="size-3.5" />
-        </Button>
-      </div>
-
-      <div className="relative min-h-0 flex-1">
-        {tabs.map((tab) => {
-          if (!mountedTabIdSet.has(tab.id)) return null;
-
-          const isActive = tab.id === activeTab.id;
-
-          return (
-            <div
-              key={tab.id}
-              className={cn("absolute inset-0", !isActive && "hidden")}
-              aria-hidden={!isActive}
-            >
-              <TerminalPane tmuxSession={tab.tmuxSession} isActive={isActive} />
-            </div>
-          );
-        })}
       </div>
 
       {showNewTabChooser && (
@@ -330,12 +355,17 @@ function ReadyMobileTerminal({ storageKey }: { storageKey: string }) {
                 Open Terminal Tab
               </h2>
               <p className="text-xs leading-5 text-muted-foreground">
-                Create a fresh tmux session, or reopen one of your 20 most
-                recently closed tabs.
+                Create a fresh tmux session, or reopen a recently closed tab. Up
+                to {MAX_TERMINAL_TABS} tabs can be open at once.
               </p>
             </div>
             <div className="mt-4 space-y-3">
-              <Button type="button" className="w-full" onClick={createFreshTab}>
+              <Button
+                type="button"
+                className="w-full"
+                onClick={createFreshTab}
+                autoFocus
+              >
                 Create New Tab
               </Button>
 
@@ -462,6 +492,7 @@ function ReadyMobileTerminal({ storageKey }: { storageKey: string }) {
                 variant="outline"
                 size="sm"
                 onClick={() => setPendingCloseTabId(null)}
+                autoFocus
               >
                 Cancel
               </Button>
@@ -483,7 +514,7 @@ function ReadyMobileTerminal({ storageKey }: { storageKey: string }) {
 
 export function MobileTerminal({ storageScope }: MobileTerminalProps) {
   const hydrated = useHydrated();
-  const storageKey = `mobile-terminal-tabs:${storageScope}`;
+  const storageKey = `${TERMINAL_STORAGE_PREFIX}${storageScope}`;
   if (!hydrated) return <div className="h-full bg-background" />;
   return <ReadyMobileTerminal key={storageKey} storageKey={storageKey} />;
 }

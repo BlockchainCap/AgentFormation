@@ -4,19 +4,18 @@ Description: Restricted self-service provisioning for one AgentFormation runtime
 Parameters:
   DeploymentName:
     Type: String
-    AllowedPattern: "^[a-z][a-z0-9-]{2,31}$"
+    AllowedPattern: "^(?!.*-runtime-)[a-z][a-z0-9-]{2,31}$"
   UserPoolId:
     Type: String
-    MinLength: 1
+    AllowedPattern: '^[A-Za-z0-9-]+_[A-Za-z0-9]+$'
   UserRegistryTableName:
     Type: String
-    MinLength: 1
-  RuntimeTemplateUrl:
-    Type: String
-    AllowedPattern: "^https://[^ ]+$"
+    MinLength: 3
+    MaxLength: 255
+    AllowedPattern: '^[A-Za-z0-9_.-]+$'
   RuntimeTemplateBucket:
     Type: String
-    MinLength: 3
+    AllowedPattern: '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
   RuntimeTemplateKey:
     Type: String
     AllowedPattern: '^provisioning/runtime-[0-9a-f]{64}\.yaml$'
@@ -56,9 +55,10 @@ Parameters:
     AllowedPattern: "^[A-Za-z0-9._:/-]+$"
   ClaudeInferenceProfileArn:
     Type: String
-    MinLength: 20
+    AllowedPattern: '^arn:[A-Za-z0-9-]+:bedrock:[A-Za-z0-9-]+:([0-9]{12})?:(inference-profile|application-inference-profile)/[A-Za-z0-9._:-]+$'
   ClaudeFoundationModelArns:
     Type: CommaDelimitedList
+    AllowedPattern: '^arn:[A-Za-z0-9-]+:bedrock:[A-Za-z0-9-]+::foundation-model/[A-Za-z0-9._:-]+$'
   CodexModelId:
     Type: String
     MinLength: 1
@@ -66,9 +66,104 @@ Parameters:
     AllowedPattern: "^[A-Za-z0-9._:/-]+$"
   UploadBucketName:
     Type: String
-    MinLength: 3
+    AllowedPattern: '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
+
+Rules:
+  MatchArchitectureAndRuntime:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref Architecture, arm64]
+            - !Contains [[t4g.medium, t4g.large, c7g.large, c7g.xlarge, m7g.large, m7g.xlarge], !Ref InstanceType]
+          - !And
+            - !Equals [!Ref Architecture, x86_64]
+            - !Contains [[t3.medium, t3.large, c7i.large, c7i.xlarge, m7i.large, m7i.xlarge], !Ref InstanceType]
+        AssertDescription: Runtime instance type must match the selected AMI architecture.
 
 Resources:
+  RuntimePermissionsBoundaryPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${DeploymentName}-runtime-boundary"
+      Description: Maximum permissions for AgentFormation runtime instance roles.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: UseSystemsManagerAgent
+            Effect: Allow
+            Action:
+              - ssm:DescribeAssociation
+              - ssm:GetDeployablePatchSnapshotForInstance
+              - ssm:GetDocument
+              - ssm:DescribeDocument
+              - ssm:GetManifest
+              - ssm:GetParameter
+              - ssm:GetParameters
+              - ssm:ListAssociations
+              - ssm:ListInstanceAssociations
+              - ssm:PutInventory
+              - ssm:PutComplianceItems
+              - ssm:PutConfigurePackageResult
+              - ssm:UpdateAssociationStatus
+              - ssm:UpdateInstanceAssociationStatus
+              - ssm:UpdateInstanceInformation
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+              - ec2messages:AcknowledgeMessage
+              - ec2messages:DeleteMessage
+              - ec2messages:FailMessage
+              - ec2messages:GetEndpoint
+              - ec2messages:GetMessages
+              - ec2messages:SendReply
+            Resource: "*"
+          - Sid: InvokeConfiguredInferenceProfile
+            Effect: Allow
+            Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+            Resource: !Ref ClaudeInferenceProfileArn
+          - Sid: InvokeConfiguredFoundationModelsThroughProfile
+            Effect: Allow
+            Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+            Resource: !Ref ClaudeFoundationModelArns
+            Condition:
+              StringEquals:
+                bedrock:InferenceProfileArn: !Ref ClaudeInferenceProfileArn
+          - Sid: ListModelMetadata
+            Effect: Allow
+            Action: [bedrock:ListFoundationModels, bedrock:ListInferenceProfiles]
+            Resource: "*"
+          - Sid: ReadConfiguredFoundationModels
+            Effect: Allow
+            Action: bedrock:GetFoundationModel
+            Resource: !Ref ClaudeFoundationModelArns
+          - Sid: ReadConfiguredInferenceProfile
+            Effect: Allow
+            Action: bedrock:GetInferenceProfile
+            Resource: !Ref ClaudeInferenceProfileArn
+          - Sid: InvokeConfiguredOpenAIModel
+            Effect: Allow
+            Action: bedrock-mantle:CreateInference
+            Resource: !Sub "arn:${AWS::Partition}:bedrock-mantle:${AWS::Region}:${AWS::AccountId}:project/default"
+            Condition:
+              StringEquals:
+                bedrock-mantle:Model: !Ref CodexModelId
+          - Sid: AllowMantleModelAutoEnablement
+            Effect: Allow
+            Action: [aws-marketplace:Subscribe, aws-marketplace:ViewSubscriptions]
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:CalledViaLast: bedrock-mantle.amazonaws.com
+          - Sid: ReadDeploymentUploads
+            Effect: Allow
+            Action: s3:GetObject
+            Resource: !Sub "arn:${AWS::Partition}:s3:::${UploadBucketName}/uploads/*"
+          - Sid: LocateDeploymentUploadBucket
+            Effect: Allow
+            Action: s3:GetBucketLocation
+            Resource: !Sub "arn:${AWS::Partition}:s3:::${UploadBucketName}"
+
   RuntimeCloudFormationRole:
     Type: AWS::IAM::Role
     Properties:
@@ -84,23 +179,39 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Sid: ManageNamedRuntimeRoles
+              - Sid: CreateBoundaryConstrainedRuntimeRoles
                 Effect: Allow
                 Action:
                   - iam:CreateRole
+                  - iam:PutRolePermissionsBoundary
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${DeploymentName}-runtime-*"
+                Condition:
+                  ArnEquals:
+                    iam:PermissionsBoundary: !Ref RuntimePermissionsBoundaryPolicy
+              - Sid: ManageNamedRuntimeRoles
+                Effect: Allow
+                Action:
                   - iam:DeleteRole
                   - iam:GetRole
                   - iam:GetRolePolicy
                   - iam:PutRolePolicy
                   - iam:DeleteRolePolicy
+                  - iam:DeleteRolePermissionsBoundary
                   - iam:ListRolePolicies
                   - iam:ListAttachedRolePolicies
                   - iam:ListInstanceProfilesForRole
                   - iam:TagRole
                   - iam:UntagRole
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${DeploymentName}-runtime-*"
+              - Sid: AttachOnlySystemsManagerCore
+                Effect: Allow
+                Action:
                   - iam:AttachRolePolicy
                   - iam:DetachRolePolicy
                 Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${DeploymentName}-runtime-*"
+                Condition:
+                  ArnEquals:
+                    iam:PolicyARN: !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
               - Sid: ManageNamedRuntimeInstanceProfiles
                 Effect: Allow
                 Action:
@@ -117,6 +228,12 @@ Resources:
                 Condition:
                   StringEquals:
                     iam:PassedToService: ec2.amazonaws.com
+              - Sid: NeverMutateOrPassTheControlRole
+                Effect: Deny
+                NotAction:
+                  - iam:Get*
+                  - iam:List*
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${DeploymentName}-runtime-cfn"
         - PolicyName: ManageRuntimeInstances
           PolicyDocument:
             Version: "2012-10-17"
@@ -168,6 +285,7 @@ Resources:
   ProvisioningStateMachineRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub "${DeploymentName}-provisioning-sfn"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -194,7 +312,7 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: [dynamodb:PutItem, dynamodb:UpdateItem]
+                Action: dynamodb:UpdateItem
                 Resource: !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${UserRegistryTableName}"
         - PolicyName: CreateRestrictedRuntimeStack
           PolicyDocument:
@@ -206,9 +324,12 @@ Resources:
                 Condition:
                   StringEquals:
                     cloudformation:RoleArn: !GetAtt RuntimeCloudFormationRole.Arn
-                    cloudformation:TemplateUrl: !Ref RuntimeTemplateUrl
+                    cloudformation:TemplateUrl: !Sub "https://${RuntimeTemplateBucket}.s3.${AWS::Region}.${AWS::URLSuffix}/${RuntimeTemplateKey}"
               - Effect: Allow
-                Action: cloudformation:DescribeStacks
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DeleteStack
                 Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${DeploymentName}-runtime-*/*"
               - Effect: Allow
                 Action: iam:PassRole
@@ -216,9 +337,6 @@ Resources:
                 Condition:
                   StringEquals:
                     iam:PassedToService: cloudformation.amazonaws.com
-              - Effect: Allow
-                Action: ec2:DescribeInstances
-                Resource: "*"
       Tags:
         - { Key: AgentFormationDeployment, Value: !Ref DeploymentName }
 
@@ -229,6 +347,7 @@ Resources:
       StateMachineType: STANDARD
       RoleArn: !GetAtt ProvisioningStateMachineRole.Arn
       Definition:
+        TimeoutSeconds: 5400
         Comment: Validate one federated user and create only that user's reviewed AgentFormation runtime stack.
         StartAt: PrepareSubjectParts
         States:
@@ -237,6 +356,8 @@ Resources:
             Parameters:
               "subject.$": $.subject
               "email.$": $.email
+              "requestedAt.$": $.requestedAt
+              "staleBefore.$": $.staleBefore
               "subjectParts.$": States.StringSplit($.subject, '-')
             Next: PrepareRuntimeInput
           PrepareRuntimeInput:
@@ -244,7 +365,12 @@ Resources:
             Parameters:
               "subject.$": $.subject
               "email.$": $.email
+              "requestedAt.$": $.requestedAt
+              "staleBefore.$": $.staleBefore
               "stackName.$": !Sub "States.Format('${DeploymentName}-runtime-{}{}{}', States.ArrayGetItem($.subjectParts, 0), States.ArrayGetItem($.subjectParts, 1), States.ArrayGetItem($.subjectParts, 2))"
+              stackPollAttempts: 0
+              priorCleanupPollAttempts: 0
+              failedCleanupPollAttempts: 0
             Next: FindFederatedUser
           FindFederatedUser:
             Type: Task
@@ -254,6 +380,13 @@ Resources:
               "Filter.$": 'States.Format(''sub = "{}"'', $.subject)'
               Limit: 2
             ResultPath: $.identity
+            Retry:
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 4
+                BackoffRate: 2
+                MaxDelaySeconds: 15
+                JitterStrategy: FULL
             Next: RequireOneFederatedUser
           RequireOneFederatedUser:
             Type: Choice
@@ -270,35 +403,167 @@ Resources:
             Default: InvalidIdentity
           RegisterProvisioning:
             Type: Task
-            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:dynamodb:putItem"
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:dynamodb:updateItem"
             Parameters:
               TableName: !Ref UserRegistryTableName
-              Item:
+              Key:
                 userSub: { "S.$": $.subject }
-                email: { "S.$": $.email }
-                runtimeStackName: { "S.$": $.stackName }
-                status: { S: provisioning }
-                provisioningStartedAt: { "S.$": $$.State.EnteredTime }
-                updatedAt: { "S.$": $$.State.EnteredTime }
-              ConditionExpression: "attribute_not_exists(userSub) OR #status = :failed"
+              UpdateExpression: "SET #email = :email, #stack = :stackName, #status = :provisioning, #startedAt = :requestedAt, #execution = :execution, #updatedAt = :requestedAt REMOVE #instance"
+              ConditionExpression: "attribute_not_exists(userSub) OR #status = :failed OR (#status = :provisioning AND #startedAt = :requestedAt AND #stack = :stackName AND #execution = :execution) OR (#status = :provisioning AND ((attribute_exists(#startedAt) AND #startedAt < :staleBefore) OR (attribute_not_exists(#startedAt) AND #updatedAt < :staleBefore)))"
               ExpressionAttributeNames:
+                "#email": email
+                "#stack": runtimeStackName
                 "#status": status
+                "#startedAt": provisioningStartedAt
+                "#execution": provisioningExecutionId
+                "#updatedAt": updatedAt
+                "#instance": instanceId
               ExpressionAttributeValues:
+                ":email": { "S.$": $.email }
+                ":stackName": { "S.$": $.stackName }
                 ":failed": { S: failed }
+                ":provisioning": { S: provisioning }
+                ":requestedAt": { "S.$": $.requestedAt }
+                ":execution": { "S.$": "$$.Execution.Id" }
+                ":staleBefore": { "S.$": $.staleBefore }
             ResultPath: $.registryWrite
+            Retry:
+              - ErrorEquals:
+                  - DynamoDb.ConditionalCheckFailedException
+                  - DynamoDB.ConditionalCheckFailedException
+                MaxAttempts: 0
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 4
+                BackoffRate: 2
+                MaxDelaySeconds: 15
+                JitterStrategy: FULL
             Catch:
               - ErrorEquals:
                   - DynamoDb.ConditionalCheckFailedException
                   - DynamoDB.ConditionalCheckFailedException
                 ResultPath: $.duplicate
                 Next: AlreadyProvisioned
+            Next: InspectPriorRuntimeStack
+          InspectPriorRuntimeStack:
+            Type: Task
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:cloudformation:describeStacks"
+            Parameters:
+              "StackName.$": $.stackName
+            ResultPath: $.priorStack
+            Retry:
+              - ErrorEquals: [CloudFormation.ValidationErrorException]
+                MaxAttempts: 0
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 4
+                BackoffRate: 2
+                MaxDelaySeconds: 15
+                JitterStrategy: FULL
+            Catch:
+              - ErrorEquals: [CloudFormation.ValidationErrorException]
+                ResultPath: $.priorStackMissing
+                Next: ResetRuntimePolls
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.provisioningError
+                Next: MarkProvisioningFailed
+            Next: DeletePriorRuntimeStack
+          DeletePriorRuntimeStack:
+            Type: Task
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:cloudformation:deleteStack"
+            Parameters:
+              "StackName.$": $.stackName
+              RoleARN: !GetAtt RuntimeCloudFormationRole.Arn
+            ResultPath: $.deletePriorStack
+            Retry:
+              - ErrorEquals: [CloudFormation.ValidationErrorException]
+                MaxAttempts: 0
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 4
+                BackoffRate: 2
+                MaxDelaySeconds: 15
+                JitterStrategy: FULL
+            Catch:
+              - ErrorEquals: [CloudFormation.ValidationErrorException]
+                ResultPath: $.priorStackMissing
+                Next: ResetRuntimePolls
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.provisioningError
+                Next: MarkProvisioningFailed
+            Next: CanWaitForPriorStackDeletion
+          CanWaitForPriorStackDeletion:
+            Type: Choice
+            Choices:
+              - Variable: $.priorCleanupPollAttempts
+                NumericLessThan: 60
+                Next: IncrementPriorCleanupPoll
+            Default: MarkProvisioningFailed
+          IncrementPriorCleanupPoll:
+            Type: Pass
+            Parameters:
+              "subject.$": $.subject
+              "email.$": $.email
+              "requestedAt.$": $.requestedAt
+              "staleBefore.$": $.staleBefore
+              "stackName.$": $.stackName
+              "stackPollAttempts.$": $.stackPollAttempts
+              "priorCleanupPollAttempts.$": States.MathAdd($.priorCleanupPollAttempts, 1)
+              "failedCleanupPollAttempts.$": $.failedCleanupPollAttempts
+            Next: WaitForPriorStackDeletion
+          WaitForPriorStackDeletion:
+            Type: Wait
+            Seconds: 15
+            Next: ReadPriorStackDeletion
+          ReadPriorStackDeletion:
+            Type: Task
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:cloudformation:describeStacks"
+            Parameters:
+              "StackName.$": $.stackName
+            ResultPath: $.priorStack
+            Retry:
+              - ErrorEquals: [CloudFormation.ValidationErrorException]
+                MaxAttempts: 0
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 4
+                BackoffRate: 2
+                MaxDelaySeconds: 15
+                JitterStrategy: FULL
+            Catch:
+              - ErrorEquals: [CloudFormation.ValidationErrorException]
+                ResultPath: $.priorStackMissing
+                Next: ResetRuntimePolls
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.provisioningError
+                Next: MarkProvisioningFailed
+            Next: CheckPriorStackDeletion
+          CheckPriorStackDeletion:
+            Type: Choice
+            Choices:
+              - Variable: $.priorStack.Stacks[0].StackStatus
+                StringEquals: DELETE_FAILED
+                Next: MarkProvisioningFailed
+            Default: CanWaitForPriorStackDeletion
+          ResetRuntimePolls:
+            Type: Pass
+            Parameters:
+              "subject.$": $.subject
+              "email.$": $.email
+              "requestedAt.$": $.requestedAt
+              "staleBefore.$": $.staleBefore
+              "stackName.$": $.stackName
+              stackPollAttempts: 0
+              "priorCleanupPollAttempts.$": $.priorCleanupPollAttempts
+              failedCleanupPollAttempts: 0
             Next: CreateRuntimeStack
           CreateRuntimeStack:
             Type: Task
             Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:cloudformation:createStack"
             Parameters:
               "StackName.$": $.stackName
-              TemplateURL: !Ref RuntimeTemplateUrl
+              "ClientRequestToken.$": $$.Execution.Name
+              TemplateURL: !Sub "https://${RuntimeTemplateBucket}.s3.${AWS::Region}.${AWS::URLSuffix}/${RuntimeTemplateKey}"
               RoleARN: !GetAtt RuntimeCloudFormationRole.Arn
               Capabilities: [CAPABILITY_NAMED_IAM]
               OnFailure: DELETE
@@ -310,6 +575,8 @@ Resources:
                   ParameterValue: !Ref RuntimeSubnetId
                 - ParameterKey: RuntimeSecurityGroupId
                   ParameterValue: !Ref RuntimeSecurityGroupId
+                - ParameterKey: RuntimePermissionsBoundaryArn
+                  ParameterValue: !Ref RuntimePermissionsBoundaryPolicy
                 - ParameterKey: UserSubject
                   "ParameterValue.$": $.subject
                 - ParameterKey: AmiId
@@ -336,10 +603,36 @@ Resources:
                 - Key: AgentFormationUserSubject
                   "Value.$": $.subject
             ResultPath: $.createStack
+            Retry:
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 4
+                BackoffRate: 2
+                MaxDelaySeconds: 15
+                JitterStrategy: FULL
             Catch:
               - ErrorEquals: [States.ALL]
                 ResultPath: $.provisioningError
-                Next: MarkProvisioningFailed
+                Next: BeginFailedStackCleanup
+            Next: CanWaitForRuntimeStack
+          CanWaitForRuntimeStack:
+            Type: Choice
+            Choices:
+              - Variable: $.stackPollAttempts
+                NumericLessThan: 140
+                Next: IncrementRuntimeStackPoll
+            Default: BeginFailedStackCleanup
+          IncrementRuntimeStackPoll:
+            Type: Pass
+            Parameters:
+              "subject.$": $.subject
+              "email.$": $.email
+              "requestedAt.$": $.requestedAt
+              "staleBefore.$": $.staleBefore
+              "stackName.$": $.stackName
+              "stackPollAttempts.$": States.MathAdd($.stackPollAttempts, 1)
+              "priorCleanupPollAttempts.$": $.priorCleanupPollAttempts
+              "failedCleanupPollAttempts.$": $.failedCleanupPollAttempts
             Next: WaitForRuntimeStack
           WaitForRuntimeStack:
             Type: Wait
@@ -351,10 +644,17 @@ Resources:
             Parameters:
               "StackName.$": $.stackName
             ResultPath: $.stack
+            Retry:
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 4
+                BackoffRate: 2
+                MaxDelaySeconds: 15
+                JitterStrategy: FULL
             Catch:
               - ErrorEquals: [States.ALL]
                 ResultPath: $.provisioningError
-                Next: MarkProvisioningFailed
+                Next: BeginFailedStackCleanup
             Next: CheckRuntimeStack
           CheckRuntimeStack:
             Type: Choice
@@ -363,31 +663,68 @@ Resources:
                 StringEquals: CREATE_COMPLETE
                 Next: FindRuntimeInstance
               - Variable: $.stack.Stacks[0].StackStatus
-                StringEquals: CREATE_IN_PROGRESS
-                Next: WaitForRuntimeStack
-            Default: MarkProvisioningFailed
+                StringMatches: "*_IN_PROGRESS"
+                Next: CanWaitForRuntimeStack
+            Default: BeginFailedStackCleanup
           FindRuntimeInstance:
             Type: Task
-            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:ec2:describeInstances"
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:cloudformation:describeStackResource"
             Parameters:
-              Filters:
-                - Name: tag:aws:cloudformation:stack-name
-                  "Values.$": States.Array($.stackName)
-                - Name: instance-state-name
-                  Values: [pending, running, stopping, stopped]
+              "StackName.$": $.stackName
+              LogicalResourceId: RuntimeInstance
             ResultPath: $.runtime
+            Retry:
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 4
+                BackoffRate: 2
+                MaxDelaySeconds: 15
+                JitterStrategy: FULL
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.provisioningError
+                Next: BeginFailedStackCleanup
             Next: RequireRuntimeInstance
           RequireRuntimeInstance:
             Type: Choice
             Choices:
-              - Variable: $.runtime.Reservations[0].Instances[0].InstanceId
+              - Variable: $.runtime.StackResourceDetail.PhysicalResourceId
                 IsPresent: true
+                Next: RecheckFederatedUser
+            Default: BeginFailedStackCleanup
+          RecheckFederatedUser:
+            Type: Task
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:cognitoidentityprovider:listUsers"
+            Parameters:
+              UserPoolId: !Ref UserPoolId
+              "Filter.$": 'States.Format(''sub = "{}"'', $.subject)'
+              Limit: 2
+            ResultPath: $.identity
+            Retry:
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 6
+                BackoffRate: 2
+                MaxDelaySeconds: 20
+                JitterStrategy: FULL
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.provisioningError
+                Next: BeginFailedStackCleanup
+            Next: RequireStillFederatedUser
+          RequireStillFederatedUser:
+            Type: Choice
+            Choices:
+              - And:
+                  - Variable: $.identity.Users[0].Username
+                    IsPresent: true
+                  - Variable: $.identity.Users[0].Enabled
+                    BooleanEquals: true
+                  - Not:
+                      Variable: $.identity.Users[1].Username
+                      IsPresent: true
                 Next: ActivateRuntime
-            Default: WaitForRuntimeRecord
-          WaitForRuntimeRecord:
-            Type: Wait
-            Seconds: 10
-            Next: FindRuntimeInstance
+            Default: BeginFailedStackCleanup
           ActivateRuntime:
             Type: Task
             Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:dynamodb:updateItem"
@@ -395,19 +732,114 @@ Resources:
               TableName: !Ref UserRegistryTableName
               Key:
                 userSub: { "S.$": $.subject }
-              UpdateExpression: "SET #status = :active, instanceId = :instanceId, updatedAt = :updatedAt"
-              ConditionExpression: "#status = :provisioning AND runtimeStackName = :stackName"
+              UpdateExpression: "SET #status = :active, instanceId = :instanceId, updatedAt = :updatedAt REMOVE #execution"
+              ConditionExpression: "#status = :provisioning AND runtimeStackName = :stackName AND provisioningStartedAt = :requestedAt AND #execution = :execution"
               ExpressionAttributeNames:
                 "#status": status
+                "#execution": provisioningExecutionId
               ExpressionAttributeValues:
                 ":active": { S: active }
                 ":provisioning": { S: provisioning }
+                ":requestedAt": { "S.$": $.requestedAt }
+                ":execution": { "S.$": "$$.Execution.Id" }
                 ":instanceId":
-                  { "S.$": "$.runtime.Reservations[0].Instances[0].InstanceId" }
+                  { "S.$": "$.runtime.StackResourceDetail.PhysicalResourceId" }
                 ":stackName": { "S.$": $.stackName }
                 ":updatedAt": { "S.$": $$.State.EnteredTime }
             ResultPath: $.registryWrite
+            Retry:
+              - ErrorEquals:
+                  - DynamoDb.ConditionalCheckFailedException
+                  - DynamoDB.ConditionalCheckFailedException
+                MaxAttempts: 0
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 6
+                BackoffRate: 2
+                MaxDelaySeconds: 20
+                JitterStrategy: FULL
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.provisioningError
+                Next: BeginFailedStackCleanup
             Next: RuntimeReady
+          BeginFailedStackCleanup:
+            Type: Task
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:cloudformation:deleteStack"
+            Parameters:
+              "StackName.$": $.stackName
+              RoleARN: !GetAtt RuntimeCloudFormationRole.Arn
+            ResultPath: $.deleteFailedStack
+            Retry:
+              - ErrorEquals: [CloudFormation.ValidationErrorException]
+                MaxAttempts: 0
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 4
+                BackoffRate: 2
+                MaxDelaySeconds: 15
+                JitterStrategy: FULL
+            Catch:
+              - ErrorEquals: [CloudFormation.ValidationErrorException]
+                ResultPath: $.failedStackMissing
+                Next: MarkProvisioningFailed
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.cleanupError
+                Next: MarkProvisioningFailed
+            Next: CanWaitForFailedStackDeletion
+          CanWaitForFailedStackDeletion:
+            Type: Choice
+            Choices:
+              - Variable: $.failedCleanupPollAttempts
+                NumericLessThan: 60
+                Next: IncrementFailedCleanupPoll
+            Default: MarkProvisioningFailed
+          IncrementFailedCleanupPoll:
+            Type: Pass
+            Parameters:
+              "subject.$": $.subject
+              "email.$": $.email
+              "requestedAt.$": $.requestedAt
+              "staleBefore.$": $.staleBefore
+              "stackName.$": $.stackName
+              "stackPollAttempts.$": $.stackPollAttempts
+              "priorCleanupPollAttempts.$": $.priorCleanupPollAttempts
+              "failedCleanupPollAttempts.$": States.MathAdd($.failedCleanupPollAttempts, 1)
+            Next: WaitForFailedStackDeletion
+          WaitForFailedStackDeletion:
+            Type: Wait
+            Seconds: 15
+            Next: ReadFailedStackDeletion
+          ReadFailedStackDeletion:
+            Type: Task
+            Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:cloudformation:describeStacks"
+            Parameters:
+              "StackName.$": $.stackName
+            ResultPath: $.failedStack
+            Retry:
+              - ErrorEquals: [CloudFormation.ValidationErrorException]
+                MaxAttempts: 0
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 4
+                BackoffRate: 2
+                MaxDelaySeconds: 15
+                JitterStrategy: FULL
+            Catch:
+              - ErrorEquals: [CloudFormation.ValidationErrorException]
+                ResultPath: $.failedStackMissing
+                Next: MarkProvisioningFailed
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.cleanupError
+                Next: MarkProvisioningFailed
+            Next: CheckFailedStackDeletion
+          CheckFailedStackDeletion:
+            Type: Choice
+            Choices:
+              - Variable: $.failedStack.Stacks[0].StackStatus
+                StringEquals: DELETE_FAILED
+                Next: MarkProvisioningFailed
+            Default: CanWaitForFailedStackDeletion
           MarkProvisioningFailed:
             Type: Task
             Resource: !Sub "arn:${AWS::Partition}:states:::aws-sdk:dynamodb:updateItem"
@@ -415,19 +847,42 @@ Resources:
               TableName: !Ref UserRegistryTableName
               Key:
                 userSub: { "S.$": $.subject }
-              UpdateExpression: "SET #status = :failed, updatedAt = :updatedAt"
-              ConditionExpression: "#status = :provisioning"
+              UpdateExpression: "SET #status = :failed, updatedAt = :updatedAt REMOVE #execution"
+              ConditionExpression: "#status = :provisioning AND runtimeStackName = :stackName AND provisioningStartedAt = :requestedAt AND #execution = :execution"
               ExpressionAttributeNames:
                 "#status": status
+                "#execution": provisioningExecutionId
               ExpressionAttributeValues:
                 ":failed": { S: failed }
                 ":provisioning": { S: provisioning }
+                ":requestedAt": { "S.$": $.requestedAt }
+                ":execution": { "S.$": "$$.Execution.Id" }
+                ":stackName": { "S.$": $.stackName }
                 ":updatedAt": { "S.$": $$.State.EnteredTime }
             ResultPath: $.registryWrite
+            Retry:
+              - ErrorEquals:
+                  - DynamoDb.ConditionalCheckFailedException
+                  - DynamoDB.ConditionalCheckFailedException
+                MaxAttempts: 0
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 4
+                BackoffRate: 2
+                MaxDelaySeconds: 15
+                JitterStrategy: FULL
+            Catch:
+              - ErrorEquals:
+                  - DynamoDb.ConditionalCheckFailedException
+                  - DynamoDB.ConditionalCheckFailedException
+                ResultPath: $.superseded
+                Next: ProvisioningSuperseded
             Next: ProvisioningFailed
           AlreadyProvisioned:
             Type: Succeed
           RuntimeReady:
+            Type: Succeed
+          ProvisioningSuperseded:
             Type: Succeed
           InvalidIdentity:
             Type: Fail
