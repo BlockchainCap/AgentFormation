@@ -66,8 +66,11 @@ function createDefaultTabs(): TerminalTab[] {
   return DEFAULT_TABS.map((tab) => ({ ...tab }));
 }
 
+export const EDIT_QUEUED_INPUT = "\x1b[1;2D";
+
 export const QUICK_KEYS: { label: string; seq?: string; action?: "clear" }[] = [
   { label: "Tab", seq: "\t" },
+  { label: "Edit queued", seq: EDIT_QUEUED_INPUT },
   { label: "Esc", seq: "\x1b" },
   { label: "Ctrl+C", seq: "\x03" },
   { label: "Ctrl+O", seq: "\x0f" },
@@ -77,6 +80,20 @@ export const QUICK_KEYS: { label: string; seq?: string; action?: "clear" }[] = [
 
 export const CLEAR_LINE = "\x15";
 export const CLEAR_TERMINAL_INPUT = "\x15\x0b";
+
+export function isEditQueuedShortcut(
+  event: Pick<
+    KeyboardEvent,
+    "key" | "shiftKey" | "altKey" | "ctrlKey" | "metaKey"
+  >,
+) {
+  return (
+    !event.ctrlKey &&
+    !event.metaKey &&
+    ((event.key === "ArrowLeft" && event.shiftKey && !event.altKey) ||
+      (event.key === "ArrowUp" && event.altKey && !event.shiftKey))
+  );
+}
 export const DPAD_WIDTH_PX = 102;
 export const DPAD_HEIGHT_PX = 70;
 export const DPAD_MARGIN_PX = 8;

@@ -1,5 +1,8 @@
 "use client";
 
+import { ssm } from "ssm-session";
+import { sendTerminalInput, sendTerminalSize } from "./terminal-stream";
+
 import {
   useCallback,
   useEffect,
@@ -34,6 +37,8 @@ import {
   TERMINAL_MIN_COLUMNS,
   TERMINAL_MIN_ROWS,
   CLEAR_TERMINAL_INPUT,
+  EDIT_QUEUED_INPUT,
+  isEditQueuedShortcut,
   DpadPosition,
   terminalLinkHandler,
   getTerminalTheme,
@@ -166,7 +171,7 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
         terminalRef.current = null;
       }
       fitAddonRef.current = null;
-      seqRef.current = 0;
+      if (mode === "fresh" || mode === "unmount") seqRef.current = 0;
       lastTermSizeRef.current = null;
       stateRef.current = "idle";
       if (mode !== "unmount") setState("idle");
@@ -297,7 +302,6 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
       }
 
       lastTermSizeRef.current = termOptions;
-      const { ssm } = await import("ssm-session");
       if (
         connectionId !== connectionIdRef.current ||
         socketRef.current !== socket ||
@@ -305,7 +309,7 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
       ) {
         return;
       }
-      ssm.sendInitMessage(socket, termOptions);
+      sendTerminalSize(socket, termOptions, seqRef.current++);
     },
     [fitTerminal],
   );
@@ -478,7 +482,6 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
           });
         }
 
-        const { ssm } = await import("ssm-session");
         if (connectionId !== connectionIdRef.current) return;
 
         const textEncoder = new TextEncoder();
@@ -493,8 +496,8 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
 
           const termOptions = fitTerminal();
           lastTermSizeRef.current = termOptions;
-          seqRef.current = 0;
-          ssm.init(socket, { token: info.tokenValue, termOptions });
+          socket.send(ssm.buildTokenMessage(info.tokenValue));
+          sendTerminalSize(socket, termOptions, seqRef.current++);
           scheduleTerminalSizeBurst();
         });
 
@@ -562,7 +565,7 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
           } else if (agentMessage.payloadType === 17) {
             const termOptions = fitTerminal();
             lastTermSizeRef.current = termOptions;
-            ssm.sendInitMessage(socket, termOptions);
+            sendTerminalSize(socket, termOptions, seqRef.current++);
             stateRef.current = "connected";
             setState("connected");
             scheduleTerminalSizeBurst();
@@ -631,7 +634,11 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
         terminal.onData((data) => {
           if (connectionId !== connectionIdRef.current) return;
           if (socket.readyState === WebSocket.OPEN) {
-            ssm.sendText(socket, textEncoder.encode(data), seqRef.current++);
+            sendTerminalInput(
+              socket,
+              textEncoder.encode(data),
+              seqRef.current++,
+            );
           }
         });
       } catch (err) {
@@ -701,12 +708,15 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
       return;
     }
-    const { ssm } = await import("ssm-session");
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
       return;
     }
     const encoder = new TextEncoder();
-    ssm.sendText(socketRef.current, encoder.encode(text), seqRef.current++);
+    sendTerminalInput(
+      socketRef.current,
+      encoder.encode(text),
+      seqRef.current++,
+    );
   }, []);
 
   const lastValueRef = useRef("");
@@ -827,6 +837,11 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
 
   const handleKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (isEditQueuedShortcut(e)) {
+        e.preventDefault();
+        void sendInput(EDIT_QUEUED_INPUT);
+        return;
+      }
       if (e.key === "Enter") {
         e.preventDefault();
         if (isSubmitShortcut(e)) {
@@ -837,7 +852,7 @@ export function TerminalPane({ tmuxSession, isActive }: TerminalPaneProps) {
         inputRef.current?.blur();
       }
     },
-    [handleSubmit],
+    [handleSubmit, sendInput],
   );
 
   const handleDpadButtonPointerDown = useCallback(

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildInputEditSequence,
+  isEditQueuedShortcut,
   clearStoredTerminalStates,
   collectTerminalUrl,
   createFreshTerminalTab,
@@ -14,6 +15,26 @@ import {
   WEB_LINK_MAX_CONTINUATION_LINES,
   TERMINAL_SCROLL_OPTIONS,
 } from "./terminal-shared";
+
+describe("queued-message keyboard access", () => {
+  it.each([
+    ["ArrowLeft", true, false, true],
+    ["ArrowUp", false, true, true],
+    ["ArrowLeft", false, false, false],
+    ["ArrowUp", false, false, false],
+    ["ArrowRight", true, false, false],
+  ])("handles %s with shift=%s alt=%s", (key, shiftKey, altKey, expected) => {
+    expect(
+      isEditQueuedShortcut({
+        key,
+        shiftKey,
+        altKey,
+        ctrlKey: false,
+        metaKey: false,
+      }),
+    ).toBe(expected);
+  });
+});
 
 type FakeTerminalCell = {
   characters: string;

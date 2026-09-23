@@ -1,11 +1,16 @@
-import { createRef } from "react";
+import { createRef, type PointerEvent } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalPaneView } from "./terminal-pane-view";
 
 function renderConnectedPane() {
   const handleDpadButtonPointerDown = vi.fn();
-  const handleQuickKeyPointerDown = vi.fn();
+  const quickKeySequences: string[] = [];
+  const handleQuickKeyPointerDown = vi.fn(
+    (event: PointerEvent<HTMLButtonElement>) => {
+      quickKeySequences.push(event.currentTarget.dataset.seq ?? "");
+    },
+  );
 
   render(
     <TerminalPaneView
@@ -49,7 +54,11 @@ function renderConnectedPane() {
     />,
   );
 
-  return { handleDpadButtonPointerDown, handleQuickKeyPointerDown };
+  return {
+    handleDpadButtonPointerDown,
+    handleQuickKeyPointerDown,
+    quickKeySequences,
+  };
 }
 
 describe("TerminalPaneView main interaction baseline", () => {
@@ -75,5 +84,11 @@ describe("TerminalPaneView main interaction baseline", () => {
 
     expect(handleDpadButtonPointerDown).toHaveBeenCalledOnce();
     expect(handleQuickKeyPointerDown).toHaveBeenCalledOnce();
+  });
+
+  it("exposes the Codex queued-message shortcut on touch screens", () => {
+    const { quickKeySequences } = renderConnectedPane();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Edit queued" }));
+    expect(quickKeySequences).toEqual(["\x1b[1;2D"]);
   });
 });

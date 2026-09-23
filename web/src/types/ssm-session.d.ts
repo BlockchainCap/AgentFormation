@@ -24,6 +24,11 @@ declare module "ssm-session" {
   }
 
   export const ssm: {
+    buildTokenMessage(token: string): string;
+    buildInputMessage(
+      data: Uint8Array,
+      sequenceNumber: number,
+    ): Uint8Array<ArrayBuffer>;
     init(socket: WebSocket, options: InitOptions): void;
     decode(data: ArrayBuffer): AgentMessage;
     sendACK(socket: WebSocket, message: AgentMessage): void;
