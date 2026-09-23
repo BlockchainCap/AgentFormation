@@ -29,6 +29,31 @@ const uploadDeliveryDocument = template.slice(
   template.indexOf("  OAuthRelayDocument:"),
 );
 
+it("attaches without sending an extra Enter to the running application", () => {
+  const content = terminalSessionDocument.slice(
+    terminalSessionDocument.indexOf("      Content:\n") +
+      "      Content:\n".length,
+    terminalSessionDocument.indexOf("\n      Tags:"),
+  );
+  const result = spawnSync(
+    "bun",
+    [
+      "-e",
+      `const profile = Bun.YAML.parse(await Bun.stdin.text()).inputs.shellProfile.linux;
+       console.log(JSON.stringify({
+         finalCommandAttaches: profile.split("\\n").at(-1).startsWith("exec tmux "),
+         trailingNewlines: (profile + "\\n").match(/\\n*$/)[0].length,
+       }));`,
+    ],
+    { input: content, encoding: "utf8", timeout: 5_000 },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({
+    finalCommandAttaches: true,
+    trailingNewlines: 1,
+  });
+});
+
 function extractRunCommand(document: string): string {
   const marker = "              runCommand:\n                - |\n";
   const start = document.indexOf(marker);
