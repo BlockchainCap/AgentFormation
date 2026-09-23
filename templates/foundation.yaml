@@ -260,7 +260,7 @@ Resources:
           idleSessionTimeout: '60'
           maxSessionDuration: '720'
           shellProfile:
-            linux: |
+            linux: |-
               export HOME=/home/agentformation
               export USER=agentformation
               export LOGNAME=agentformation
