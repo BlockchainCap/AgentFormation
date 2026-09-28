@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { BrowserSession } from "@/components/browser-session";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -30,7 +31,9 @@ export default function RootLayout({
       <head>
         <meta name="apple-mobile-web-app-capable" content="yes" />
       </head>
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <BrowserSession>{children}</BrowserSession>
+      </body>
     </html>
   );
 }

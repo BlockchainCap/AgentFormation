@@ -283,7 +283,7 @@ fi
 
 if [[ "$REGISTRY_ITEM_PRESENT" == "true" ]]; then
   PURGED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  TOMBSTONE_EXPIRES_AT="$(( $(date +%s) + 2 * 60 * 60 ))"
+  TOMBSTONE_EXPIRES_AT="$(( $(date +%s) + 31 * 24 * 60 * 60 ))"
   TOMBSTONE_VALUES="$(jq -cn --arg updatedAt "$RECORDED_UPDATED_AT" \
     --arg purge "$PURGE_LOCK" \
     --arg purgeExpires "$PURGE_LOCK_EXPIRES_AT" \

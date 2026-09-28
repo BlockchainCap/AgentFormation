@@ -248,9 +248,9 @@ it when AWS publishes security updates.
   profile aborts purge and releases the exact lock. After profile deletion, the
   locked row is atomically replaced with a privacy-minimal `purged` marker that
   contains only the subject, status, update time, and DynamoDB expiry time. The
-  marker remains for two hours. Every Auth.js token refresh checks that marker
+  marker remains for 31 days. Every Auth.js token refresh checks that marker
   and clears a revoked session; a browser that never refreshes expires within
-  one hour. Old browser sessions therefore cannot outlive the marker or create
+  30 days. Old browser sessions therefore cannot outlive the marker or create
   another runtime before DynamoDB expires it.
 
 Remove the Identity Center application or group assignment as the source-of-truth
@@ -261,7 +261,12 @@ Signing out of AgentFormation clears the app session and that browser's saved ta
 metadata. It intentionally does not sign the person out of IAM Identity Center,
 because that organization-wide session may also be serving other company apps.
 As a result, signing back in can be immediate while the Identity Center session
-is still valid. AgentFormation app sessions expire after one hour.
+is still valid. AgentFormation app sessions expire after 30 days without renewal.
+The browser renews the session when the app opens, returns to the foreground,
+and every hour while it remains open and online. Each renewal checks access
+revocation and extends both the encrypted token and its browser cookie by 30 days.
+Use the matching operator scripts when updating the web app so purge markers
+remain longer than the maximum browser session lifetime.
 
 Group removal prevents the next federation but cannot recall an already-issued
 application session by itself. Use `users disable` for immediate app-side

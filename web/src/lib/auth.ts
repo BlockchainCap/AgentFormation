@@ -15,11 +15,12 @@ const cognitoProfileSchema = z.object({
 });
 
 const authEnvironment = getAuthEnvironment();
+const sessionMaxAge = 30 * 24 * 60 * 60;
 
 const nextAuth = NextAuth({
   providers: [createCognitoProvider(authEnvironment)],
-  session: { strategy: "jwt", maxAge: 60 * 60 },
-  jwt: { maxAge: 60 * 60 },
+  session: { strategy: "jwt", maxAge: sessionMaxAge },
+  jwt: { maxAge: sessionMaxAge },
   callbacks: {
     async signIn({ profile }) {
       const parsed = cognitoProfileSchema.safeParse(profile);

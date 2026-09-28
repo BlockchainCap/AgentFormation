@@ -178,6 +178,7 @@ case "$service $operation" in
         exit 255
       fi
       : >"$state/registry-tombstoned"
+      printf '%s' "$item" >"$state/tombstone.json"
     else
       exit 64
     fi
@@ -232,6 +233,7 @@ esac
 
 describe("permanent user purge", () => {
   it("deletes a subject-bound failed stack even without an InstanceId output", () => {
+    const startedAt = Math.floor(Date.now() / 1000);
     const run = runPurge("missing-output");
     try {
       expect(run.result.stderr).toBe("");
@@ -240,6 +242,14 @@ describe("permanent user purge", () => {
       expect(run.wasCreated("runtime-deleted")).toBe(true);
       expect(run.wasCreated("registry-tombstoned")).toBe(true);
       expect(run.wasCreated("user-deleted")).toBe(true);
+      const tombstone = JSON.parse(
+        readFileSync(join(run.fixture, "tombstone.json"), "utf8"),
+      );
+      const expiresAt = Number(tombstone.expiresAt.N);
+      expect(expiresAt).toBeGreaterThanOrEqual(startedAt + 31 * 24 * 60 * 60);
+      expect(expiresAt).toBeLessThanOrEqual(
+        Math.floor(Date.now() / 1000) + 31 * 24 * 60 * 60,
+      );
     } finally {
       rmSync(run.fixture, { recursive: true, force: true });
     }
