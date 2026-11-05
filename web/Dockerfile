@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM docker.io/library/node:24.19.0-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 AS build-base
+FROM --platform=$BUILDPLATFORM docker.io/library/node:24.22.2-alpine3.24@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS build-base
 ARG BUN_VERSION=1.3.6
 RUN apk upgrade --no-cache && \
     npm install --global "bun@${BUN_VERSION}"
@@ -36,7 +36,7 @@ RUN mkdir -p public && \
 # reliable under QEMU, while App Runner still needs an amd64 image. Install the
 # small set of traced native runtime dependencies for the requested target so a
 # native arm64 build never ships arm64 Sharp binaries in the amd64 image.
-FROM docker.io/library/node:24.19.0-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 AS runtime-deps
+FROM docker.io/library/node:24.22.2-alpine3.24@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS runtime-deps
 ARG BUN_VERSION=1.3.6
 WORKDIR /app
 RUN apk upgrade --no-cache && \
@@ -44,7 +44,7 @@ RUN apk upgrade --no-cache && \
 COPY package.json bun.lock* ./
 RUN bun install --frozen-lockfile --production
 
-FROM docker.io/library/node:24.19.0-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 AS runner
+FROM docker.io/library/node:24.22.2-alpine3.24@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
